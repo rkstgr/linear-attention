@@ -14,7 +14,8 @@ import jax.numpy as jnp
 import optax
 from jax import Array
 
-from data import mqar_batch, mqar_example
+from data import get_level
+from train import inspect_example, train_and_eval
 from utils import RMSNorm, SwiGLU, apply_rope, rope_freqs
 
 
@@ -183,69 +184,22 @@ if __name__ == "__main__":
     print("\nsample:", "".join(chars[int(t)] for t in tokens))
 
     # -----------------------------------------------------------------------
-    # MQAR — Zoology formulation (Arora et al. 2023).
-    # Softmax attention should hit >95% accuracy in a few hundred steps.
+    # MQAR — pass `--level 0` for fast dev (vocab=256), default level1 matches
+    # Zoology (vocab=8192, seq=64, N_KV=4, power-law gaps). Softmax attention
+    # should hit >99% accuracy in 1–2 epochs on either.
     # -----------------------------------------------------------------------
-    print("\n--- MQAR ---")
-    VOCAB = 64
-    N_KV = 4
-    SEQ_LEN = 32
-    BATCH = 32
+    import sys
+    cfg = get_level(sys.argv)
+    print(f"\n--- MQAR (transformer, vocab={cfg.vocab_size}) ---")
+    k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
 
     model = Transformer(
-        vocab_size=VOCAB,
+        vocab_size=cfg.vocab_size,
         dim=64,
         n_heads=4,
         n_layers=2,
         mlp_mult=4,
-        key=jax.random.PRNGKey(1),
+        key=k_model,
     )
-
-    schedule = optax.join_schedules(
-        schedules=[
-            optax.linear_schedule(0.0, 1e-3, transition_steps=100),
-            optax.constant_schedule(1e-3),
-        ],
-        boundaries=[100],
-    )
-    opt = optax.adamw(schedule)
-    opt_state = opt.init(eqx.filter(model, eqx.is_inexact_array))
-
-    def mqar_loss_and_acc(model, tokens, targets, mask):
-        # all inputs: (B, T)
-        logits = jax.vmap(model)(tokens)                          # (B, T, V)
-        losses = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
-        loss = (losses * mask).sum() / mask.sum()
-        preds = jnp.argmax(logits, axis=-1)
-        acc = ((preds == targets).astype(jnp.float32) * mask).sum() / mask.sum()
-        return loss, acc
-
-    @eqx.filter_jit
-    def mqar_step(model, opt_state, tokens, targets, mask):
-        (loss, acc), grads = eqx.filter_value_and_grad(mqar_loss_and_acc, has_aux=True)(
-            model, tokens, targets, mask
-        )
-        updates, opt_state = opt.update(
-            grads, opt_state, eqx.filter(model, eqx.is_inexact_array)
-        )
-        model = eqx.apply_updates(model, updates)
-        return model, opt_state, loss, acc
-
-    k_data = jax.random.PRNGKey(42)
-    for i in range(1400):
-        k_data, sub = jax.random.split(k_data)
-        tokens, targets, mask = mqar_batch(sub, BATCH, N_KV, SEQ_LEN, VOCAB)
-        model, opt_state, loss, acc = mqar_step(model, opt_state, tokens, targets, mask)
-        if i % 50 == 0:
-            print(f"step {i:4d}  loss {float(loss):.4f}  acc {float(acc):.3f}")
-
-    # inspect one example: show kv pairs, query positions, predicted vs true values
-    tokens, targets, mask = mqar_example(jax.random.PRNGKey(999), N_KV, SEQ_LEN, VOCAB)
-    preds = jnp.argmax(model(tokens), axis=-1)
-    q_idx = jnp.nonzero(mask, size=N_KV)[0]  # (N_KV,) query positions
-    print(f"\n  tokens   : {tokens.tolist()}")
-    print(f"  kv pairs : {tokens[: 2 * N_KV].tolist()}")
-    print(f"  q pos    : {q_idx.tolist()}")
-    print(f"  queries  : {tokens[q_idx].tolist()}")
-    print(f"  expected : {targets[q_idx].tolist()}")
-    print(f"  predicted: {preds[q_idx].tolist()}")
+    model, _ = train_and_eval(model, cfg, k_train)
+    inspect_example(model, k_inspect, cfg)
