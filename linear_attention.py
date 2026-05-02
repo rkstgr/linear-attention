@@ -189,9 +189,9 @@ class Transformer(eqx.Module):
 
 if __name__ == "__main__":
     print("--- MQAR (linear attention) ---")
-    VOCAB = 64
+    VOCAB = 128
     N_KV = 4
-    SEQ_LEN = 32
+    SEQ_LEN = 64
     BATCH = 32
 
     model = Transformer(
@@ -203,14 +203,13 @@ if __name__ == "__main__":
         key=jax.random.PRNGKey(1),
     )
 
-    schedule = optax.join_schedules(
-        schedules=[
-            optax.linear_schedule(0.0, 1e-3, transition_steps=100),
-            optax.constant_schedule(1e-3),
-        ],
-        boundaries=[100],
-    )
-    opt = optax.adamw(schedule)
+    opt = optax.adamw(optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=1e-2,
+        warmup_steps=100,
+        decay_steps=1000,     # decay phase length AFTER warmup ends
+        end_value=5e-5,
+    ))
     opt_state = opt.init(eqx.filter(model, eqx.is_inexact_array))
 
     def mqar_loss_and_acc(model, tokens, targets, mask):
@@ -233,7 +232,7 @@ if __name__ == "__main__":
         return model, opt_state, loss, acc
 
     k_data = jax.random.PRNGKey(42)
-    for i in range(3000):
+    for i in range(1000):
         k_data, sub = jax.random.split(k_data)
         tokens, targets, mask = mqar_batch(sub, BATCH, N_KV, SEQ_LEN, VOCAB)
         model, opt_state, loss, acc = mqar_step(

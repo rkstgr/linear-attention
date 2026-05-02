@@ -230,14 +230,13 @@ if __name__ == "__main__":
         gated=GATED,
     )
 
-    schedule = optax.join_schedules(
-        schedules=[
-            optax.linear_schedule(0.0, 1e-3, transition_steps=100),
-            optax.constant_schedule(1e-3),
-        ],
-        boundaries=[100],
-    )
-    opt = optax.adamw(schedule)
+    opt = optax.adamw(optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=1e-2,
+        warmup_steps=100,
+        decay_steps=1000,     # decay phase length AFTER warmup ends
+        end_value=1e-5,
+    ))
     opt_state = opt.init(eqx.filter(model, eqx.is_inexact_array))
 
     def mqar_loss_and_acc(model, tokens, targets, mask):
@@ -260,7 +259,7 @@ if __name__ == "__main__":
         return model, opt_state, loss, acc
 
     k_data = jax.random.PRNGKey(42)
-    for i in range(3000):
+    for i in range(1000):
         k_data, sub = jax.random.split(k_data)
         tokens, targets, mask = mqar_batch(sub, BATCH, N_KV, SEQ_LEN, VOCAB)
         model, opt_state, loss, acc = mqar_step(
@@ -278,34 +277,3 @@ if __name__ == "__main__":
     print(f"  queries  : {tokens[q_idx].tolist()}")
     print(f"  expected : {targets[q_idx].tolist()}")
     print(f"  predicted: {preds[q_idx].tolist()}")
-
-    # ---- conv kernel inspection -----------------------------------------
-    # Each conv has shape (K, D) = (4, 64). Per channel d, the 4 taps say
-    # "how much of x[t-k] flows into the conv output at t."
-    print("\n--- conv kernel inspection ---")
-    for layer_idx, blk in enumerate(model.blocks):
-        print(f"\nlayer {layer_idx}")
-        for name, W in [("Cq", blk.attn.Cq), ("Ck", blk.attn.Ck), ("Cv", blk.attn.Cv)]:
-            W = jnp.asarray(W)            # (K, D)
-            K_, D_ = W.shape
-            absW = jnp.abs(W)             # (K, D)
-            tap_mass = absW.mean(axis=1)  # mean |w| per tap, averaged across channels
-            tap_mass = tap_mass / tap_mass.sum()
-            dominant_tap = absW.argmax(axis=0)   # for each channel, which tap is largest
-            tap_hist = jnp.bincount(dominant_tap, length=K_)
-            # show one example "interesting" channel — highest variance across taps
-            tap_var_per_ch = absW.var(axis=0)
-            ch_pick = int(tap_var_per_ch.argmax())
-            kern = W[:, ch_pick].tolist()
-            print(
-                f"  {name}  per-tap mass:        "
-                + " ".join(f"t-{k}: {tap_mass[k]:.3f}" for k in range(K_))
-            )
-            print(
-                f"      channels-by-dom-tap: "
-                + " ".join(f"t-{k}: {int(tap_hist[k])}" for k in range(K_))
-            )
-            print(
-                f"      example channel {ch_pick:2d} (highest tap-variance):  "
-                + "[" + ", ".join(f"{v:+.3f}" for v in kern) + "]"
-            )
