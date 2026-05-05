@@ -13,3 +13,13 @@ dependencies = [
     # force-select the Metal device. Community plugin pinned to jaxlib 0.9.x.
     "jax-mps; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+
+# NVIDIA GPU acceleration (Linux x86_64). Opt-in via `uv sync --group cuda`.
+# Pulls the CUDA 12 plugin + bundled nvidia runtime libs (cuBLAS, cuDNN,
+# NCCL, ...) — kept out of the default install because the wheels are ~2 GB.
+# data.py sets JAX_PLATFORMS=cuda,cpu so JAX prefers GPU and falls back to
+# CPU when no usable GPU is present.
+[dependency-groups]
+cuda = [
+    "jax[cuda12]>=0.9,<0.10; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]

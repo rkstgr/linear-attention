@@ -10,19 +10,36 @@ Solved means >99% test acc.
 Attention
 Linear Attention: solved in x epochs. xms per step 
 Deltanet: solved in 3 epochs, 60ms per step.
-Gated Deltanet: 
+Gated Deltanet:
+
+### Level 1
+
+| model             | epoch | train_loss | train_acc | test_acc |
+| ----------------- | ----: | ---------: | --------: | -------: |
+| Transformer       |     2 |     1.3187 |     0.795 |    0.993 |
+| Deltanet          |    31 |     0.0050 |     0.999 |    0.983 |
+| Gated Deltanet    |    31 |     0.0047 |     0.999 |    0.976 |
+| Linear Attention  |    21 |     0.0062 |     0.998 |    0.971 |
 
 ## Setup
 
 ```
-uv sync
+uv sync                  # CPU + Apple Silicon (Metal)
+uv sync --group cuda     # + NVIDIA GPU (Linux x86_64)
 ```
 
 **Apple Silicon GPU.** The project auto-selects JAX's Metal backend
 (`jax-mps` plugin) on macOS arm64 — no env vars needed. Step time is ~3.3×
-faster than CPU on an M-series chip. To force CPU (e.g. for debugging or
-comparing numbers), set `JAX_PLATFORMS=cpu`.
+faster than CPU on an M-series chip.
 **Caveat**: Many small kernels that need to be launched (deltanet) leads to slower perf than using *cpu*.
+
+**NVIDIA GPU.** Opt-in dependency group (the CUDA wheels are ~2 GB, so
+they're not in the default install). After `uv sync --group cuda`,
+`data.py` sets `JAX_PLATFORMS=cuda,cpu` so JAX prefers the GPU and silently
+falls back to CPU if no usable device is present.
+
+To force CPU on either platform (e.g. for debugging or comparing numbers),
+set `JAX_PLATFORMS=cpu`.
 
 ## Run
 

@@ -28,11 +28,19 @@ Vocab convention:
 import os as _os
 import platform as _platform
 
-# Auto-select Metal on Apple Silicon. Must run before any jax import anywhere
-# in the project; data.py is the first file every entrypoint imports, so the
-# env var is set in time. Override with `JAX_PLATFORMS=cpu` to opt out.
+# Auto-select GPU when available, fall back to CPU otherwise. Must run before
+# any jax import anywhere in the project; data.py is the first file every
+# entrypoint imports, so the env var is set in time. Override with
+# `JAX_PLATFORMS=cpu` to opt out.
+#
+#   Darwin arm64        -> Metal (jax-mps plugin)
+#   Linux x86_64        -> CUDA if a GPU + CUDA jaxlib are present, else CPU
+#                          ("cuda,cpu" is a priority list — JAX tries CUDA
+#                          first and silently falls back if init fails)
 if _platform.system() == "Darwin" and _platform.machine() == "arm64":
     _os.environ.setdefault("JAX_PLATFORMS", "mps")
+elif _platform.system() == "Linux" and _platform.machine() == "x86_64":
+    _os.environ.setdefault("JAX_PLATFORMS", "cuda,cpu")
 
 from dataclasses import dataclass
 
