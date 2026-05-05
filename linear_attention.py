@@ -15,13 +15,11 @@ VOCAB=64 within ~1500 steps (the same config the softmax baseline solves).
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import optax
 from jax import Array
 
 from data import get_level
 from train import inspect_example, train_and_eval
-from utils import RMSNorm, SwiGLU, apply_rope, rope_freqs
-
+from utils import RMSNorm, SwiGLU, rope_freqs
 
 CONV_SIZE = 4  # short conv kernel; matches FLA / Based recipe
 
@@ -91,44 +89,30 @@ class LinearAttention(eqx.Module):
         # project -> short causal conv -> SiLU -> reshape to heads.
         # Conv adds local-context features (Zoology / Based recipe).
         # No RoPE: keeping the same recipe as deltanet.py for fair comparison.
-        q = jax.nn.silu(causal_dwconv(x @ self.Wq, self.Cq)).reshape(T, H, Dh).transpose(1, 0, 2)
-        k = jax.nn.silu(causal_dwconv(x @ self.Wk, self.Ck)).reshape(T, H, Dh).transpose(1, 0, 2)
-        v = jax.nn.silu(causal_dwconv(x @ self.Wv, self.Cv)).reshape(T, H, Dh).transpose(1, 0, 2)
+        q = (
+            jax.nn.silu(causal_dwconv(x @ self.Wq, self.Cq))
+            .reshape(T, H, Dh)
+            .transpose(1, 0, 2)
+        )
+        k = (
+            jax.nn.silu(causal_dwconv(x @ self.Wk, self.Ck))
+            .reshape(T, H, Dh)
+            .transpose(1, 0, 2)
+        )
+        v = (
+            jax.nn.silu(causal_dwconv(x @ self.Wv, self.Cv))
+            .reshape(T, H, Dh)
+            .transpose(1, 0, 2)
+        )
 
         # ------------------------------------------------------------------
-        # YOUR CODE HERE
-        #
-        # Compute `out` of shape (H, T, Dh) implementing
-        #
-        #   o_t = sum_{s <= t}  v_s  *  (k_s^T q_t)
-        #
-        # Two natural ways:
-        #   (a) parallel form  — build the (T, T) score matrix q @ k^T,
-        #       apply a causal lower-triangular mask, multiply by v.
-        #       Mirrors transformer.py exactly except: no scale, no softmax.
-        #
-        #   (b) recurrent form — jax.lax.scan over time with carry
-        #       S_t = S_{t-1} + v_t k_t^T, output S_t q_t at each step.
-        #       Use jax.vmap to scan each head independently.
-        #
-        # Both should give the same numbers. (a) is shorter and faster on
-        # GPU; (b) is what the post's recurrence framing actually says.
-        # Either is fine — pick one, write ~5 lines.
-        # ------------------------------------------------------------------
-
         mask = jnp.tril(jnp.ones((T, T), dtype=bool))
-        out = (q @ k.transpose(0,2,1) * mask) @ v
+        out = (q @ k.transpose(0, 2, 1) * mask) @ v
         # ------------------------------------------------------------------
 
         # merge heads: (H, T, Dh) -> (T, D)
         out = out.transpose(1, 0, 2).reshape(T, D)
         return out @ self.Wo
-
-
-# ---------------------------------------------------------------------------
-# Block + Transformer — identical to transformer.py, repeated here so this
-# file is self-contained. The only line that differs is `self.attn = ...`.
-# ---------------------------------------------------------------------------
 
 
 class Block(eqx.Module):
@@ -192,6 +176,7 @@ class Transformer(eqx.Module):
 
 if __name__ == "__main__":
     import sys
+
     cfg = get_level(sys.argv)
     print(f"--- MQAR (linear attention, vocab={cfg.vocab_size}) ---")
     k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)

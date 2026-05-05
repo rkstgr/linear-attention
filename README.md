@@ -4,11 +4,25 @@ One file per model. No framework, no configs beyond `data.level1`. Every file
 has a `__main__` that trains on MQAR and prints predictions on a held-out
 example.
 
+## Results
+Solved means >99% test acc.
+### Level 0
+Attention
+Linear Attention: solved in x epochs. xms per step 
+Deltanet: solved in 3 epochs, 60ms per step.
+Gated Deltanet: 
+
 ## Setup
 
 ```
 uv sync
 ```
+
+**Apple Silicon GPU.** The project auto-selects JAX's Metal backend
+(`jax-mps` plugin) on macOS arm64 — no env vars needed. Step time is ~3.3×
+faster than CPU on an M-series chip. To force CPU (e.g. for debugging or
+comparing numbers), set `JAX_PLATFORMS=cpu`.
+**Caveat**: Many small kernels that need to be launched (deltanet) leads to slower perf than using *cpu*.
 
 ## Run
 

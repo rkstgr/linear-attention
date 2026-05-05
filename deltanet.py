@@ -23,13 +23,14 @@ import sys
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import optax
 from jax import Array
 
 from data import get_level
 from train import inspect_example, train_and_eval
-from utils import RMSNorm, SwiGLU, apply_rope, rope_freqs
+from utils import RMSNorm, SwiGLU, rope_freqs
 
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 1)
 
 CONV_SIZE = 4  # short conv kernel; standard FLA default
 
@@ -111,9 +112,21 @@ class DeltaNet(eqx.Module):
 
         # project: (T, D) -> (T, D), then short causal conv across time, then SiLU.
         # Order matches FLA reference: project -> dwconv -> SiLU -> reshape -> norm.
-        q = jax.nn.silu(causal_dwconv(x @ self.Wq, self.Cq)).reshape(T, H, Dh).transpose(1, 0, 2)
-        k = jax.nn.silu(causal_dwconv(x @ self.Wk, self.Ck)).reshape(T, H, Dh).transpose(1, 0, 2)
-        v = jax.nn.silu(causal_dwconv(x @ self.Wv, self.Cv)).reshape(T, H, Dh).transpose(1, 0, 2)
+        q = (
+            jax.nn.silu(causal_dwconv(x @ self.Wq, self.Cq))
+            .reshape(T, H, Dh)
+            .transpose(1, 0, 2)
+        )
+        k = (
+            jax.nn.silu(causal_dwconv(x @ self.Wk, self.Ck))
+            .reshape(T, H, Dh)
+            .transpose(1, 0, 2)
+        )
+        v = (
+            jax.nn.silu(causal_dwconv(x @ self.Wv, self.Cv))
+            .reshape(T, H, Dh)
+            .transpose(1, 0, 2)
+        )
 
         # gates per (head, time): (T, H) -> (H, T). Computed from raw x, not post-conv.
         beta = 2.0 * jax.nn.sigmoid(x @ self.Wbeta).transpose(1, 0)
@@ -132,12 +145,15 @@ class DeltaNet(eqx.Module):
         def per_head(q, k, v, beta, alpha):
             def step(S, inputs):
                 q_t, k_t, v_t, beta_t, alpha_t = inputs
-                S_new = (
-                    alpha_t * (S @ (jnp.eye(Dh) - beta_t * jnp.outer(k_t, k_t)))
-                    + beta_t * jnp.outer(v_t, k_t)
-                )
+                # S @ (I - beta k k^T) = S - beta (S k) k^T — matvec + outer,
+                # avoids the Dh×Dh @ Dh×Dh matmul (O(Dh^3) -> O(Dh^2)).
+                Sk = S @ k_t
+                S_new = alpha_t * (
+                    S - beta_t * jnp.outer(Sk, k_t)
+                ) + beta_t * jnp.outer(v_t, k_t)
                 o_t = S_new @ q_t
                 return S_new, o_t
+
             S0 = jnp.zeros((Dh, Dh))
             _, out = jax.lax.scan(step, S0, (q, k, v, beta, alpha))
             return out
@@ -194,7 +210,9 @@ class Transformer(eqx.Module):
         keys = jax.random.split(key, n_layers + 2)
         s = 1.0 / jnp.sqrt(dim)
         self.tok_emb = jax.random.normal(keys[0], (vocab_size, dim)) * s
-        self.blocks = [Block(dim, n_heads, mlp_mult, k, gated=gated) for k in keys[1:-1]]
+        self.blocks = [
+            Block(dim, n_heads, mlp_mult, k, gated=gated) for k in keys[1:-1]
+        ]
         self.final_norm = RMSNorm(dim)
         self.lm_head = jax.random.normal(keys[-1], (dim, vocab_size)) * s
         self.head_dim = dim // n_heads

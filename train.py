@@ -7,6 +7,8 @@ only in architecture, not in protocol — so the loop lives here and each
 model's __main__ is a one-liner.
 """
 
+import time
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -81,7 +83,7 @@ def train_and_eval(model, cfg: Config, key, opt=None):
 
     n_full = (cfg.n_train // cfg.batch_size) * cfg.batch_size
     n_batches = n_full // cfg.batch_size
-    log_every = max(1, n_batches // 10)  # ~10 intra-epoch progress lines
+    log_every = max(1, n_batches // 20)  # ~10 intra-epoch progress lines
     best_acc = 0.0
     patience = 0
     history = []
@@ -92,6 +94,10 @@ def train_and_eval(model, cfg: Config, key, opt=None):
         idx = perm.reshape(-1, cfg.batch_size)
 
         losses, accs = [], []
+        # Track wall-clock between log points; float(loss) below forces sync,
+        # so the delta is honest. First reading includes JIT compile.
+        last_log_t = time.perf_counter()
+        last_log_step = 0
         for i, batch_idx in enumerate(idx):
             x = train_tokens[batch_idx]
             y = train_targets[batch_idx]
@@ -101,28 +107,38 @@ def train_and_eval(model, cfg: Config, key, opt=None):
             accs.append(acc)
             # always log step 1 (JIT compile done) + every log_every after
             if i == 0 or (i + 1) % log_every == 0:
+                loss_f = float(loss)  # blocks on dispatch
+                now = time.perf_counter()
+                ms = (now - last_log_t) / ((i + 1) - last_log_step) * 1000
                 print(
                     f"  epoch {epoch:3d} step {i + 1:4d}/{n_batches}  "
-                    f"loss {float(loss):.4f}  acc {float(acc):.3f}"
+                    f"loss {loss_f:.4f}  acc {float(acc):.3f}  "
+                    f"{ms:7.1f} ms/step"
                 )
+                last_log_t = now
+                last_log_step = i + 1
 
         train_loss = float(jnp.mean(jnp.stack(losses)))
         train_acc = float(jnp.mean(jnp.stack(accs)))
         test_acc = evaluate(model, test_data, cfg.eval_batch_size)
 
-        history.append({
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "test_acc": test_acc,
-        })
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "test_acc": test_acc,
+            }
+        )
         print(
             f"epoch {epoch:3d}  train_loss {train_loss:.4f}  "
             f"train_acc {train_acc:.3f}  test_acc {test_acc:.3f}"
         )
 
         if test_acc >= cfg.target_acc:
-            print(f"early stop @ epoch {epoch}: test_acc {test_acc:.3f} >= {cfg.target_acc}")
+            print(
+                f"early stop @ epoch {epoch}: test_acc {test_acc:.3f} >= {cfg.target_acc}"
+            )
             break
         if test_acc > best_acc + 1e-3:
             best_acc = test_acc

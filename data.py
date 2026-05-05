@@ -25,6 +25,15 @@ Vocab convention:
     token 0 is reserved (never appears as key or value; may appear as noise)
 """
 
+import os as _os
+import platform as _platform
+
+# Auto-select Metal on Apple Silicon. Must run before any jax import anywhere
+# in the project; data.py is the first file every entrypoint imports, so the
+# env var is set in time. Override with `JAX_PLATFORMS=cpu` to opt out.
+if _platform.system() == "Darwin" and _platform.machine() == "arm64":
+    _os.environ.setdefault("JAX_PLATFORMS", "mps")
+
 from dataclasses import dataclass
 
 import jax
