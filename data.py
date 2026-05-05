@@ -111,18 +111,73 @@ level1 = Config(
 )
 
 
-LEVELS = {0: level0, 1: level1}
+# Named difficulty ladder (vocab fixed at 8192). Schedule follows Zoology's
+# original_mqar_configs.py: max_epochs=32 flat across difficulty, batch and
+# patience constant; harder tasks scale n_train *down* (not training time up)
+# to keep per-config compute roughly bounded.
+#   easy   — softmax wins comfortably; sub-quadratic models keep up.
+#   medium — DeltaNet / Gated DeltaNet start trailing softmax.
+#   hard   — continuation of the progression.
+easy = Config(
+    vocab_size=8192,
+    input_seq_len=128,
+    num_kv_pairs=8,
+    power_a=0.01,
+    n_train=100_000,
+    n_test=1_000,
+    batch_size=64,
+    eval_batch_size=64,
+    max_epochs=32,
+    learning_rate=1e-3,
+    target_acc=0.99,
+    patience_epochs=5,
+)
+
+medium = Config(
+    vocab_size=8192,
+    input_seq_len=512,
+    num_kv_pairs=64,
+    power_a=0.01,
+    n_train=40_000,
+    n_test=1_000,
+    batch_size=32,
+    eval_batch_size=32,
+    max_epochs=32,
+    learning_rate=1e-3,
+    target_acc=0.99,
+    patience_epochs=5,
+)
+
+hard = Config(
+    vocab_size=8192,
+    input_seq_len=1024,
+    num_kv_pairs=128,
+    power_a=0.01,
+    n_train=20_000,
+    n_test=1_000,
+    batch_size=16,
+    eval_batch_size=16,
+    max_epochs=32,
+    learning_rate=1e-3,
+    target_acc=0.99,
+    patience_epochs=5,
+)
 
 
-def get_level(argv, default: int = 1) -> Config:
-    """Parse `--level N` from argv. Defaults to level1 if the flag is missing."""
+LEVELS = {0: level0, 1: level1, "easy": easy, "medium": medium, "hard": hard}
+
+
+def get_level(argv, default=1) -> Config:
+    """Parse `--level VAL` from argv. Accepts ints (0, 1) or names
+    (easy, medium, hard). Defaults to level1 if the flag is missing."""
     if "--level" in argv:
-        n = int(argv[argv.index("--level") + 1])
+        s = argv[argv.index("--level") + 1]
     else:
-        n = default
-    if n not in LEVELS:
-        raise ValueError(f"unknown --level {n}; available: {sorted(LEVELS)}")
-    return LEVELS[n]
+        s = str(default)
+    key = int(s) if s.lstrip("-").isdigit() else s
+    if key not in LEVELS:
+        raise ValueError(f"unknown --level {s}; available: {list(LEVELS)}")
+    return LEVELS[key]
 
 
 def mqar_example(
