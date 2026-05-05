@@ -21,6 +21,18 @@ Gated Deltanet:
 | Gated Deltanet    |    31 |     0.0047 |     0.999 |    0.976 |
 | Linear Attention  |    21 |     0.0062 |     0.998 |    0.971 |
 
+### Easy
+
+Run under the pre-Zoology schedule (max_epochs=64, patience=8, n_train=100k);
+sub-quadratic models trained past the 32-epoch cap now in effect.
+
+| model            | epoch | train_loss | train_acc | test_acc |
+| ---------------- | ----: | ---------: | --------: | -------: |
+| Transformer      |     5 |     0.0558 |     0.992 |    0.991 |
+| Linear Attention |    42 |     0.0082 |     0.997 |    0.955 |
+| DeltaNet         |    63 |     0.0073 |     0.998 |    0.961 |
+| Gated DeltaNet   |    47 |     0.0094 |     0.997 |    0.952 |
+
 ## Setup
 
 ```
