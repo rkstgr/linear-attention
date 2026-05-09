@@ -26,21 +26,14 @@ Vocab convention:
 """
 
 import os as _os
-import platform as _platform
 
-# Auto-select GPU when available, fall back to CPU otherwise. Must run before
-# any jax import anywhere in the project; data.py is the first file every
-# entrypoint imports, so the env var is set in time. Override with
-# `JAX_PLATFORMS=cpu` to opt out.
-#
-#   Darwin arm64        -> Metal (jax-mps plugin)
-#   Linux x86_64        -> CUDA if a GPU + CUDA jaxlib are present, else CPU
-#                          ("cuda,cpu" is a priority list — JAX tries CUDA
-#                          first and silently falls back if init fails)
-if _platform.system() == "Darwin" and _platform.machine() == "arm64":
-    _os.environ.setdefault("JAX_PLATFORMS", "mps")
-elif _platform.system() == "Linux" and _platform.machine() == "x86_64":
-    _os.environ.setdefault("JAX_PLATFORMS", "cuda,cpu")
+# Default to CPU. DeltaNet's per-token `lax.scan` is dominated by per-step
+# kernel launch overhead on MPS (and small-matmul overhead on CUDA), so CPU
+# is fastest for the small models in this repo. Set `JAX_PLATFORMS=cuda,cpu`
+# explicitly when you actually want GPU (e.g. for the large softmax baseline).
+# Must run before any jax import anywhere; data.py is the first import in
+# every entrypoint, so the env var lands in time.
+_os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 from dataclasses import dataclass
 
@@ -65,29 +58,6 @@ class Config:
     patience_epochs: int
 
 
-# level0 — small-vocab dev config. Same task shape as level1 (seq=64, N_KV=4)
-# but vocab=256 so each step is ~30× cheaper at the lm_head matmul. Use this
-# for fast iteration / smoke testing.
-#
-# Note on n_train: distractors are noisier at small vocab (P(collision with
-# active key) ≈ 4/256 vs. 4/8192 for level1), so the model needs more data to
-# learn the lookup function rather than memorizing. n_train=50k still runs
-# in well under a minute on CPU thanks to the cheap lm_head.
-level0 = Config(
-    vocab_size=256,
-    input_seq_len=64,
-    num_kv_pairs=4,
-    power_a=0.01,
-    n_train=50_000,
-    n_test=1_000,
-    batch_size=64,
-    eval_batch_size=64,
-    max_epochs=32,
-    learning_rate=1e-3,
-    target_acc=0.99,
-    patience_epochs=5,
-)
-
 # level1 — Zoology's easiest training config from `original_mqar_configs.py`
 # (vocab=8192, seq=64, N_KV=4, power-law gaps). Numbers from this run are
 # directly comparable to published Zoology curves.
@@ -109,75 +79,6 @@ level1 = Config(
     target_acc=0.99,
     patience_epochs=5,
 )
-
-
-# Named difficulty ladder (vocab fixed at 8192). Schedule follows Zoology's
-# original_mqar_configs.py: max_epochs=32 flat across difficulty, batch and
-# patience constant; harder tasks scale n_train *down* (not training time up)
-# to keep per-config compute roughly bounded.
-#   easy   — softmax wins comfortably; sub-quadratic models keep up.
-#   medium — DeltaNet / Gated DeltaNet start trailing softmax.
-#   hard   — continuation of the progression.
-easy = Config(
-    vocab_size=8192,
-    input_seq_len=128,
-    num_kv_pairs=8,
-    power_a=0.01,
-    n_train=100_000,
-    n_test=1_000,
-    batch_size=64,
-    eval_batch_size=64,
-    max_epochs=32,
-    learning_rate=1e-3,
-    target_acc=0.99,
-    patience_epochs=5,
-)
-
-medium = Config(
-    vocab_size=8192,
-    input_seq_len=512,
-    num_kv_pairs=64,
-    power_a=0.01,
-    n_train=40_000,
-    n_test=1_000,
-    batch_size=32,
-    eval_batch_size=32,
-    max_epochs=32,
-    learning_rate=1e-3,
-    target_acc=0.99,
-    patience_epochs=5,
-)
-
-hard = Config(
-    vocab_size=8192,
-    input_seq_len=1024,
-    num_kv_pairs=128,
-    power_a=0.01,
-    n_train=20_000,
-    n_test=1_000,
-    batch_size=16,
-    eval_batch_size=16,
-    max_epochs=32,
-    learning_rate=1e-3,
-    target_acc=0.99,
-    patience_epochs=5,
-)
-
-
-LEVELS = {0: level0, 1: level1, "easy": easy, "medium": medium, "hard": hard}
-
-
-def get_level(argv, default=1) -> Config:
-    """Parse `--level VAL` from argv. Accepts ints (0, 1) or names
-    (easy, medium, hard). Defaults to level1 if the flag is missing."""
-    if "--level" in argv:
-        s = argv[argv.index("--level") + 1]
-    else:
-        s = str(default)
-    key = int(s) if s.lstrip("-").isdigit() else s
-    if key not in LEVELS:
-        raise ValueError(f"unknown --level {s}; available: {list(LEVELS)}")
-    return LEVELS[key]
 
 
 def mqar_example(

@@ -12,12 +12,15 @@ Pass/fail: should reach >= 0.95 MQAR accuracy at N_KV=4, SEQ_LEN=32,
 VOCAB=64 within ~1500 steps (the same config the softmax baseline solves).
 """
 
+import os
+os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax import Array
 
-from data import get_level
+from data import level1
 from train import inspect_example, train_and_eval
 from utils import RMSNorm, SwiGLU, rope_freqs
 
@@ -169,15 +172,12 @@ class Transformer(eqx.Module):
 
 
 # ---------------------------------------------------------------------------
-# MQAR — pass `--level 0` for fast dev (vocab=256), default level1 matches
-# Zoology (vocab=8192, seq=64, N_KV=4, power-law gaps). Linear attention
-# should reach >99% on either: capacity d_k = 16 >> N_KV = 4.
+# MQAR (level1 — Zoology baseline: vocab=8192, seq=64, N_KV=4, power-law gaps).
+# Linear attention should reach >99% — capacity d_k = 16 >> N_KV = 4.
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
-
-    cfg = get_level(sys.argv)
+    cfg = level1
     print(f"--- MQAR (linear attention, vocab={cfg.vocab_size}) ---")
     k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
 

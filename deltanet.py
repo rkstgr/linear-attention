@@ -18,6 +18,10 @@ Run:
     uv run python deltanet.py --gated    # Gated DeltaNet
 """
 
+import os
+
+os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
+
 import sys
 
 import equinox as eqx
@@ -25,7 +29,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from data import get_level
+from data import level1
 from train import inspect_example, train_and_eval
 from utils import RMSNorm, SwiGLU, rope_freqs
 
@@ -77,6 +81,8 @@ class DeltaNet(eqx.Module):
     Wv: Array
     Wbeta: Array
     Walpha: Array
+    balpha: Array
+    dt_logit: Array
     Wo: Array
     Cq: Array
     Ck: Array
@@ -93,9 +99,10 @@ class DeltaNet(eqx.Module):
         self.Wq = jax.random.normal(keys[0], (dim, dim)) * s
         self.Wk = jax.random.normal(keys[1], (dim, dim)) * s
         self.Wv = jax.random.normal(keys[2], (dim, dim)) * s
-        # per-head per-token scalar gates: project (T, D) -> (T, H)
         self.Wbeta = jax.random.normal(keys[3], (dim, n_heads)) * s
         self.Walpha = jax.random.normal(keys[4], (dim, n_heads)) * s
+        self.balpha = jnp.zeros((n_heads,))
+        self.dt_logit = jnp.full((n_heads,), -10.0)
         self.Wo = jax.random.normal(keys[5], (dim, dim)) * s
         # short causal depthwise conv weights, one filter bank per stream
         self.Cq = jax.random.normal(keys[6], (CONV_SIZE, dim)) * sc
@@ -131,9 +138,11 @@ class DeltaNet(eqx.Module):
         # gates per (head, time): (T, H) -> (H, T). Computed from raw x, not post-conv.
         beta = 2.0 * jax.nn.sigmoid(x @ self.Wbeta).transpose(1, 0)
         if self.gated:
-            # +4.6 bias so sigmoid(0 + 4.6) ~= 0.99 at init: state retains memory.
-            # Standard trick in Mamba2 / Gated-DeltaNet papers.
-            alpha = jax.nn.sigmoid(x @ self.Walpha + 4.6).transpose(1, 0)
+            # alpha = exp(-softplus(dt_logit) * sigmoid(x @ Walpha + balpha))
+            # Bounded in (0, 1] by construction; see __init__ for init rationale.
+            g = jax.nn.sigmoid(x @ self.Walpha + self.balpha)  # (T, H)
+            dt = jax.nn.softplus(self.dt_logit)  # (H,)
+            alpha = jnp.exp(-dt * g).transpose(1, 0)  # (H, T)
         else:
             alpha = jnp.ones_like(beta)  # alpha=1 → no decay → plain DeltaNet
 
@@ -228,15 +237,14 @@ class Transformer(eqx.Module):
 
 
 # ---------------------------------------------------------------------------
-# MQAR — pass `--level 0` for fast dev (vocab=256), default level1 matches
-# Zoology (vocab=8192, seq=64, N_KV=4, power-law gaps). DeltaNet should reach
-# >99% on either: surgical overwrite handles the 4 keys cleanly.
+# MQAR (level1 — Zoology baseline: vocab=8192, seq=64, N_KV=4, power-law gaps).
+# DeltaNet should reach >99% — surgical overwrite handles the 4 keys cleanly.
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     GATED = "--gated" in sys.argv
     name = "Gated DeltaNet" if GATED else "DeltaNet"
-    cfg = get_level(sys.argv)
+    cfg = level1
     print(f"--- MQAR ({name}, vocab={cfg.vocab_size}) ---")
     k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
 

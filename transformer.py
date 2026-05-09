@@ -8,13 +8,16 @@ Run:
     uv run python transformer.py
 """
 
+import os
+os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
 from jax import Array
 
-from data import get_level
+from data import level1
 from train import inspect_example, train_and_eval
 from utils import RMSNorm, SwiGLU, apply_rope, rope_freqs
 
@@ -184,12 +187,10 @@ if __name__ == "__main__":
     print("\nsample:", "".join(chars[int(t)] for t in tokens))
 
     # -----------------------------------------------------------------------
-    # MQAR — pass `--level 0` for fast dev (vocab=256), default level1 matches
-    # Zoology (vocab=8192, seq=64, N_KV=4, power-law gaps). Softmax attention
-    # should hit >99% accuracy in 1–2 epochs on either.
+    # MQAR (level1 — Zoology baseline: vocab=8192, seq=64, N_KV=4, power-law
+    # gaps). Softmax attention should hit >99% accuracy in 1–2 epochs.
     # -----------------------------------------------------------------------
-    import sys
-    cfg = get_level(sys.argv)
+    cfg = level1
     print(f"\n--- MQAR (transformer, vocab={cfg.vocab_size}) ---")
     k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
 
