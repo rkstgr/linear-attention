@@ -61,6 +61,37 @@ init keeps the gap small — `softplus` saturates at very negative input,
 so `dt_logit` moves off −10 slowly. Less aggressive init (e.g. −3) would
 trade `α ≈ 1` fidelity for faster activation.
 
+### Scaling — parallel vs recurrent vs chunkwise
+
+Three single-head impls of `S_t = S_{t-1} + k_t v_t^T` (no delta, no gating):
+parallel `(Q K^T ⊙ M) V`, per-token `lax.scan`, and chunkwise (scan over
+chunks of size C, parallel form within). fp32, head_dim=16, batch=1.
+
+```
+uv run python bench_chunkwise.py --device cpu
+uv run python bench_chunkwise.py --device mps
+uv run python bench_chunkwise.py --device mps --c-sweep
+uv run python bench_chunkwise_plot.py
+```
+
+![scaling](figures/bench_chunkwise.png)
+
+CPU: XLA fuses the scan tightly, so recurrent stays fastest at every T;
+parallel pays its T² tax past T≈200 and crosses chunkwise.
+MPS: per-token scan is dispatch-bound and recurrent collapses to a flat
+~1–15 ms ceiling; chunkwise wins everywhere, parallel climbs steeply.
+That gap is the entire point of chunkwise.
+
+![C sweet spot](figures/bench_chunkwise_C_sweep.png)
+
+Chunk size C trades intra-chunk parallel form (large C → T² waste inside
+each chunk) against scan length (small C → dispatch overhead). At T=2048
+the CPU sweet spot is ~C=64; on MPS the curve is still falling at C=256
+— bigger chunks, and bigger feature maps, are where MPS wants to live.
+
+Measured on a MacBook Pro M5 (10-core, 16 GB) — CSV is gitignored, regenerate
+locally.
+
 ## Setup
 
 ```
