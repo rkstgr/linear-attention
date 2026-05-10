@@ -34,12 +34,23 @@ os.environ["JAX_PLATFORMS"] = args.device  # must precede `import jax`
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
+# Force true fp32 matmuls. On Ampere+ (A100, H100) JAX defaults to TF32
+# which truncates inputs to ~10-bit mantissas — the parallel form's big
+# Q @ K.T then disagrees with the per-token recurrent by ~1e-2, breaking
+# the correctness check and giving parallel an unfair speed edge.
+jax.config.update("jax_default_matmul_precision", "highest")
+
 
 HEAD_DIM = 16
 T_SWEEP = [64, 128, 256, 512, 1024, 2048, 4096]
 C_FIXED = 64
-C_SWEEP = [16, 32, 64, 128, 256]
-T_FOR_C_SWEEP = 2048
+# Two C-sweeps so the chunk-size sweet spot is visible on dispatch-light
+# accelerators too: small T leans on intra-chunk T² waste, big T amplifies
+# dispatch overhead at small C and shifts the optimum upward.
+C_SWEEPS = [
+    (2048, [16, 32, 64, 128, 256]),
+    (8192, [32, 64, 128, 256, 512, 1024]),
+]
 CSV_PATH = Path(__file__).resolve().parent / "bench_chunkwise.csv"
 
 
@@ -191,10 +202,11 @@ def t_sweep_plan(device):
 
 def c_sweep_plan(device):
     cells = []
-    for C in C_SWEEP:
-        for mode in ("fwd", "bwd"):
-            cells.append({"impl": "chunkwise", "device": device,
-                          "T": T_FOR_C_SWEEP, "mode": mode, "C": C})
+    for T, Cs in C_SWEEPS:
+        for C in Cs:
+            for mode in ("fwd", "bwd"):
+                cells.append({"impl": "chunkwise", "device": device,
+                              "T": T, "mode": mode, "C": C})
     return cells
 
 
