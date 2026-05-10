@@ -68,9 +68,8 @@ parallel `(Q K^T ⊙ M) V`, per-token `lax.scan`, and chunkwise (scan over
 chunks of size C, parallel form within). fp32, head_dim=16, batch=1.
 
 ```
-uv run python bench_chunkwise.py --device cpu
-uv run python bench_chunkwise.py --device mps
-uv run python bench_chunkwise.py --device mps --c-sweep
+uv run python bench_chunkwise.py --device {cpu,mps,cuda}
+uv run python bench_chunkwise.py --device {cpu,mps,cuda} --c-sweep
 uv run python bench_chunkwise_plot.py
 ```
 
@@ -78,44 +77,14 @@ uv run python bench_chunkwise_plot.py
 
 ![M5 scaling](figures/bench_chunkwise.png)
 
-CPU: XLA fuses the scan tightly, so recurrent stays fastest at every T;
-parallel pays its T² tax past T≈200 and crosses chunkwise.
-MPS: per-token scan is dispatch-bound and recurrent collapses to a flat
-~1–15 ms ceiling; chunkwise wins everywhere, parallel climbs steeply.
-That gap is the entire point of chunkwise.
-
 ![M5 C sweet spot](figures/bench_chunkwise_C_sweep.png)
-
-Chunk size C trades intra-chunk parallel form (large C → T² waste inside
-each chunk) against scan length (small C → dispatch overhead). At T=2048
-the CPU sweet spot is ~C=64; on MPS the curve is still falling at C=256
-— bigger chunks, and bigger feature maps, are where MPS wants to live.
 
 **A100** (40 GB, single GPU)
 
 ![A100 scaling](figures/a100/bench_chunkwise.png)
 
-Recurrent is hopelessly dispatch-bound (~50× slower than parallel at every
-T), so the chunkwise vs parallel race is the interesting one.
-Parallel stays flat at ~0.13 ms up to T≈2048 — the (T,T) attention matrix
-fits in cache and the whole forward is just one launched kernel.
-Past T=4096 it starts climbing, but at T=16384 parallel is still ~3× faster
-than chunkwise at d=16 single-head. The crossover never materialises in
-this config: even a 1 GB attention matrix is bandwidth-cheap when the d=16
-matmuls amortise into a single fused launch.
-
 ![A100 C sweet spot](figures/a100/bench_chunkwise_C_sweep.png)
 
-Both T panels fall monotonically with C — no sweet spot. With d=16 every
-intra-chunk matmul is tiny, so the only thing C buys is fewer scan
-iterations. Real linear-attention models don't live here: head_dim=64–128
-puts a meaningful d² carry update inside each chunk, and multi-head ×
-batched workloads change the launch arithmetic. This config is small
-enough that parallel keeps the lead — chunkwise's win is *structural*
-(O(T·d²) compute, O(d²) state) and shows up clearly only in regimes
-parallel can't enter.
-
-CSV is gitignored, regenerate locally.
 
 ## Setup
 
