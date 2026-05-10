@@ -42,7 +42,11 @@ jax.config.update("jax_default_matmul_precision", "highest")
 
 
 HEAD_DIM = 16
-T_SWEEP = [64, 128, 256, 512, 1024, 2048, 4096]
+# At head_dim=16 the parallel form is so cheap that on a modern GPU the
+# T x T attention matrix stays in cache up to T~4096 — chunkwise can't beat
+# it there. Pushing T to 8192/16384 makes the mask big enough to strain HBM
+# (256 MB / 1 GB), which is where parallel finally loses to chunkwise.
+T_SWEEP = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 C_FIXED = 64
 # Two C-sweeps so the chunk-size sweet spot is visible on dispatch-light
 # accelerators too: small T leans on intra-chunk T² waste, big T amplifies
