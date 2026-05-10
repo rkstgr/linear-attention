@@ -93,10 +93,6 @@ uv sync                  # CPU only
 uv sync --group cuda     # + NVIDIA GPU (Linux x86_64)
 ```
 
-CPU is the JAX default. DN's per-token scan is dispatch-bound on
-accelerators for tiny ops; CPU wins at this scale. Force GPU with
-`JAX_PLATFORMS=cuda,cpu`.
-
 ## Run a single model
 
 ```
