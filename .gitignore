@@ -2,3 +2,4 @@ __pycache__/
 .experiment_cache/
 .envrc
 bench_chunkwise.csv
+.DS_Store
