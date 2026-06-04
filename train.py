@@ -17,6 +17,14 @@ import optax
 from data import Config, make_split, mqar_example
 
 
+def tree_l2_norm(tree):
+    """L2 norm over all inexact array leaves in a pytree."""
+    leaves = [x for x in jax.tree.leaves(tree) if eqx.is_inexact_array(x)]
+    if not leaves:
+        return jnp.array(0.0)
+    return jnp.sqrt(sum(jnp.sum(jnp.square(x)) for x in leaves))
+
+
 def loss_and_acc(model, tokens, targets, mask):
     """Cross-entropy and accuracy at masked (query) positions only."""
     logits = jax.vmap(model)(tokens)
@@ -49,7 +57,7 @@ def evaluate(model, data, batch_size: int) -> float:
     return float(jnp.mean(jnp.stack(accs)))
 
 
-def train_and_eval(model, cfg: Config, key, opt=None):
+def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
     """Train `model` on MQAR per `cfg` with early stopping.
 
     Pre-generates a fixed train and test split (Zoology-style caching), runs
@@ -57,7 +65,8 @@ def train_and_eval(model, cfg: Config, key, opt=None):
     or test_acc has not improved by 1e-3 for patience_epochs epochs.
 
     If `opt` is None, uses plain AdamW(cfg.learning_rate). Pass an explicit
-    optax optimizer (e.g. with warmup or decay) to override.
+    optax optimizer (e.g. with warmup or decay) to override. If `log_fn` is
+    passed, it receives `(metrics, model)` at the same cadence as stdout.
 
     Returns (trained_model, history) where history is a list of per-epoch dicts.
     """
@@ -75,18 +84,27 @@ def train_and_eval(model, cfg: Config, key, opt=None):
         (loss, acc), grads = eqx.filter_value_and_grad(loss_and_acc, has_aux=True)(
             model, x, y, m
         )
+        grad_norm = tree_l2_norm(grads)
         updates, opt_state = opt.update(
             grads, opt_state, eqx.filter(model, eqx.is_inexact_array)
         )
+        update_norm = tree_l2_norm(updates)
         model = eqx.apply_updates(model, updates)
-        return model, opt_state, loss, acc
+        param_norm = tree_l2_norm(model)
+        return model, opt_state, loss, acc, grad_norm, update_norm, param_norm
 
     n_full = (cfg.n_train // cfg.batch_size) * cfg.batch_size
     n_batches = n_full // cfg.batch_size
+    if n_batches == 0:
+        raise ValueError(
+            f"n_train={cfg.n_train} is smaller than batch_size={cfg.batch_size}; "
+            "increase n_train or reduce batch_size."
+        )
     log_every = max(1, n_batches // 20)  # ~10 intra-epoch progress lines
     best_acc = 0.0
     patience = 0
     history = []
+    global_step = 0
 
     for epoch in range(cfg.max_epochs):
         k_loop, k_perm = jax.random.split(k_loop)
@@ -102,7 +120,10 @@ def train_and_eval(model, cfg: Config, key, opt=None):
             x = train_tokens[batch_idx]
             y = train_targets[batch_idx]
             m = train_mask[batch_idx]
-            model, opt_state, loss, acc = step(model, opt_state, x, y, m)
+            model, opt_state, loss, acc, grad_norm, update_norm, param_norm = step(
+                model, opt_state, x, y, m
+            )
+            global_step += 1
             losses.append(loss)
             accs.append(acc)
             # always log step 1 (JIT compile done) + every log_every after
@@ -115,6 +136,22 @@ def train_and_eval(model, cfg: Config, key, opt=None):
                     f"loss {loss_f:.4f}  acc {float(acc):.3f}  "
                     f"{ms:7.1f} ms/step"
                 )
+                if log_fn is not None:
+                    log_fn(
+                        {
+                            "kind": "train",
+                            "epoch": epoch,
+                            "step": i + 1,
+                            "global_step": global_step,
+                            "train/loss": loss_f,
+                            "train/acc": float(acc),
+                            "perf/ms_per_step": ms,
+                            "optim/grad_norm": float(grad_norm),
+                            "optim/update_norm": float(update_norm),
+                            "model/param_norm": float(param_norm),
+                        },
+                        model,
+                    )
                 last_log_t = now
                 last_log_step = i + 1
 
@@ -134,6 +171,18 @@ def train_and_eval(model, cfg: Config, key, opt=None):
             f"epoch {epoch:3d}  train_loss {train_loss:.4f}  "
             f"train_acc {train_acc:.3f}  test_acc {test_acc:.3f}"
         )
+        if log_fn is not None:
+            log_fn(
+                {
+                    "kind": "epoch",
+                    "epoch": epoch,
+                    "global_step": global_step,
+                    "epoch/train_loss": train_loss,
+                    "epoch/train_acc": train_acc,
+                    "epoch/test_acc": test_acc,
+                },
+                model,
+            )
 
         if test_acc >= cfg.target_acc:
             print(

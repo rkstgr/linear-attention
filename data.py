@@ -58,6 +58,48 @@ class Config:
     patience_epochs: int
 
 
+# toy — first proof test for new recurrent mechanisms.
+#
+# With one association there is no key disambiguation yet. Passing this says
+# the model can carry a prefix value to a query position at all; failing this
+# points at write/read plumbing or inner-update stability.
+toy = Config(
+    vocab_size=64,
+    input_seq_len=16,
+    num_kv_pairs=1,
+    power_a=0.01,
+    n_train=5_000,
+    n_test=256,
+    batch_size=64,
+    eval_batch_size=64,
+    max_epochs=16,
+    learning_rate=1e-3,
+    target_acc=0.99,
+    patience_epochs=5,
+)
+
+
+# easy — debug curriculum for new recurrent mechanisms.
+#
+# This is intentionally easier than Zoology level1: small vocab, short context,
+# and only two associations. It still requires content-based lookup, but the
+# model gets a low-entropy first rung before level1's 4096-way value choice.
+easy = Config(
+    vocab_size=128,
+    input_seq_len=32,
+    num_kv_pairs=2,
+    power_a=0.01,
+    n_train=20_000,
+    n_test=512,
+    batch_size=64,
+    eval_batch_size=64,
+    max_epochs=16,
+    learning_rate=1e-3,
+    target_acc=0.99,
+    patience_epochs=5,
+)
+
+
 # level1 — Zoology's easiest training config from `original_mqar_configs.py`
 # (vocab=8192, seq=64, N_KV=4, power-law gaps). Numbers from this run are
 # directly comparable to published Zoology curves.
@@ -79,6 +121,13 @@ level1 = Config(
     target_acc=0.99,
     patience_epochs=5,
 )
+
+
+CONFIGS = {
+    "toy": toy,
+    "easy": easy,
+    "level1": level1,
+}
 
 
 def mqar_example(

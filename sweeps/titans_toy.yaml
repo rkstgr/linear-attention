@@ -1,0 +1,52 @@
+program: sweep_titans_toy.py
+project: linear-attention
+name: titans-toy
+method: bayes
+metric:
+  name: sweep/best_test_acc
+  goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 3
+command:
+  - uv
+  - run
+  - --with
+  - wandb
+  - python
+  - ${program}
+parameters:
+  max_inner_lr:
+    distribution: log_uniform_values
+    min: 0.0005
+    max: 0.1
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01
+  memory_mult:
+    values: [1, 2, 4, 8]
+  seed:
+    values: [1, 2, 3]
+  dim:
+    values: [32, 48, 64]
+  n_heads:
+    values: [1, 2, 4]
+  n_layers:
+    values: [1, 2]
+  mlp_mult:
+    values: [2, 4]
+  n_train:
+    value: 5000
+  n_test:
+    value: 256
+  batch_size:
+    value: 64
+  eval_batch_size:
+    value: 64
+  max_epochs:
+    value: 16
+  patience_epochs:
+    value: 5
+  diagnostics:
+    value: true
