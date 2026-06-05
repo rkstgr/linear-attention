@@ -9,10 +9,7 @@ dependencies = [
     "equinox>=0.11",
     "optax>=0.2",
     "numpy>=1.26",
-    "matplotlib>=3.8",
-    # Apple Silicon GPU acceleration. Set JAX_PLATFORMS=mps at runtime to
-    # force-select the Metal device. Community plugin pinned to jaxlib 0.9.x.
-    "jax-mps; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "matplotlib>=3.8"
 ]
 
 # NVIDIA GPU acceleration (Linux x86_64). Opt-in via `uv sync --group cuda`.
