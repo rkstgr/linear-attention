@@ -24,6 +24,7 @@ from train import train_and_eval
 
 CONV_SIZE = 4
 TRAIN_FLOP_MULTIPLIER = 3.0
+NONFINITE_SCORE_PENALTY = 0.05
 GPU_PLATFORMS = {"cuda", "gpu"}
 
 
@@ -59,6 +60,17 @@ def jax_runtime_info():
         device.platform in GPU_PLATFORMS for device in devices
     )
     return backend, devices, has_gpu
+
+
+def update_unlocked_config(run, current_config, values):
+    """Avoid W&B sweep-lock warnings by only adding genuinely new config keys."""
+    unlocked = {k: v for k, v in values.items() if k not in current_config}
+    if unlocked:
+        run.config.update(unlocked, allow_val_change=True)
+
+
+def missing_to(value, default):
+    return default if value is None else value
 
 
 def count_params(model) -> int:
@@ -191,9 +203,10 @@ def main():
     )
     steps_per_epoch = cfg.n_train // cfg.batch_size
     train_flops_per_step = int(TRAIN_FLOP_MULTIPLIER * forward_flops * cfg.batch_size)
-    run.config.update(
+    update_unlocked_config(
+        run,
+        wc,
         {
-            "config_name": config_name,
             "vocab_size": cfg.vocab_size,
             "input_seq_len": cfg.input_seq_len,
             "num_kv_pairs": cfg.num_kv_pairs,
@@ -206,8 +219,8 @@ def main():
             "forward_flops_per_token": forward_flops / cfg.input_seq_len,
             "train_flops_per_step_est": train_flops_per_step,
             "train_flop_multiplier_est": TRAIN_FLOP_MULTIPLIER,
+            "nonfinite_score_penalty": NONFINITE_SCORE_PENALTY,
         },
-        allow_val_change=True,
     )
     run.log(
         {
@@ -215,6 +228,7 @@ def main():
             "runtime/jax_backend_cpu": 1.0 if jax_backend == "cpu" else 0.0,
             "runtime/jax_backend_gpu": 1.0 if jax_has_gpu else 0.0,
             "runtime/jax_has_gpu": 1.0 if jax_has_gpu else 0.0,
+            "runtime/has_gpu": 1.0 if jax_has_gpu else 0.0,
             "compute/forward_flops_per_example": forward_flops,
             "compute/forward_flops_per_token": forward_flops / cfg.input_seq_len,
             "compute/train_flops_per_step_est": train_flops_per_step,
@@ -228,15 +242,53 @@ def main():
         cfg,
         diagnostics_enabled=bool(diagnostics),
     )
-    model, history = train_and_eval(model, cfg, k_train, log_fn=log_fn)
+    model, history, train_info = train_and_eval(
+        model,
+        cfg,
+        k_train,
+        log_fn=log_fn,
+        fail_fast_nonfinite=True,
+        return_info=True,
+    )
 
-    best_test_acc = max(h["test_acc"] for h in history)
-    best_epoch = max(history, key=lambda h: h["test_acc"])["epoch"]
-    final = history[-1]
+    best_record = max(history, key=lambda h: h["test_acc"], default=None)
+    best_test_acc = best_record["test_acc"] if best_record is not None else 0.0
+    best_epoch = best_record["epoch"] if best_record is not None else -1
+    final = history[-1] if history else {
+        "test_acc": 0.0,
+        "train_acc": 0.0,
+        "train_loss": float("nan"),
+    }
     total_train_flops = train_flops_per_step * steps_per_epoch * len(history)
+    nonfinite = bool(train_info["nonfinite"])
+    objective_score = best_test_acc - (NONFINITE_SCORE_PENALTY if nonfinite else 0.0)
     run.log(
         {
+            "objective/score": objective_score,
+            "objective/best_test_acc": best_test_acc,
+            "objective/best_epoch": best_epoch,
+            "objective/final_test_acc": final["test_acc"],
+            "objective/final_train_acc": final["train_acc"],
+            "objective/final_train_loss": final["train_loss"],
+            "objective/epochs_ran": len(history),
+            "health/nonfinite": 1.0 if nonfinite else 0.0,
+            "health/nonfinite_epoch": missing_to(train_info["nonfinite_epoch"], -1),
+            "health/nonfinite_step": missing_to(train_info["nonfinite_step"], -1),
+            "health/nonfinite_global_step": missing_to(
+                train_info["nonfinite_global_step"], -1
+            ),
+            "health/nonfinite_loss": missing_to(train_info["nonfinite_loss"], 0.0),
+            "health/nonfinite_grad_norm": missing_to(
+                train_info["nonfinite_grad_norm"], 0.0
+            ),
+            "health/nonfinite_update_norm": missing_to(
+                train_info["nonfinite_update_norm"], 0.0
+            ),
+            "health/nonfinite_param_norm": missing_to(
+                train_info["nonfinite_param_norm"], 0.0
+            ),
             "sweep/best_test_acc": best_test_acc,
+            "sweep/score": objective_score,
             "sweep/best_epoch": best_epoch,
             "sweep/final_test_acc": final["test_acc"],
             "sweep/final_train_acc": final["train_acc"],
@@ -246,6 +298,7 @@ def main():
             "compute/total_train_tflops_est": total_train_flops / 1e12,
         }
     )
+    run.summary["health/stop_reason"] = train_info["stop_reason"]
     run.finish()
 
 

@@ -3,7 +3,7 @@ project: linear-attention
 name: titans-level1
 method: bayes
 metric:
-  name: sweep/best_test_acc
+  name: objective/score
   goal: maximize
 early_terminate:
   type: hyperband

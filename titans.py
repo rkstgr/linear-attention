@@ -367,19 +367,19 @@ class Transformer(eqx.Module):
             return (x * query_mask).sum() / query_count
 
         metrics = {
-            "diag/query_acc": qmean((preds == targets).astype(jnp.float32)),
-            "diag/query_true_prob": qmean(true_prob),
-            "diag/query_prefix_value_mass": qmean(prefix_value_mass),
-            "diag/query_best_prefix_value_acc": qmean(
+            "lookup/query_acc": qmean((preds == targets).astype(jnp.float32)),
+            "lookup/query_true_prob": qmean(true_prob),
+            "lookup/query_prefix_value_mass": qmean(prefix_value_mass),
+            "lookup/query_best_prefix_value_acc": qmean(
                 (best_prefix_value == targets).astype(jnp.float32)
             ),
-            "diag/query_pred_is_value_half": qmean(
+            "lookup/query_pred_is_value_half": qmean(
                 (preds >= (vocab_size // 2)).astype(jnp.float32)
             ),
-            "diag/query_logit_true": qmean(
+            "lookup/query_logit_true": qmean(
                 jnp.take_along_axis(logits, targets[:, None], axis=-1)[:, 0]
             ),
-            "diag/query_logit_max": qmean(jnp.max(logits, axis=-1)),
+            "lookup/query_logit_max": qmean(jnp.max(logits, axis=-1)),
         }
 
         x = self.tok_emb[tokens]
@@ -409,11 +409,11 @@ def summarize_trace(trace: dict[str, Array], query_mask: Array, num_kv_pairs: in
     metrics = {}
     for name in ("beta", "nu", "alpha"):
         x = trace[name]
-        metrics[f"diag/{name}_mean"] = mean_all(x)
-        metrics[f"diag/{name}_min"] = jnp.min(x)
-        metrics[f"diag/{name}_max"] = jnp.max(x)
-        metrics[f"diag/{name}_query_mean"] = mean_role(x, query_mask)
-        metrics[f"diag/{name}_noise_mean"] = mean_role(x, noise_mask)
+        metrics[f"memory/{name}/mean"] = mean_all(x)
+        metrics[f"memory/{name}/min"] = jnp.min(x)
+        metrics[f"memory/{name}/max"] = jnp.max(x)
+        metrics[f"memory/{name}/query_mean"] = mean_role(x, query_mask)
+        metrics[f"memory/{name}/noise_mean"] = mean_role(x, noise_mask)
 
     for name in (
         "residual_norm",
@@ -426,22 +426,22 @@ def summarize_trace(trace: dict[str, Array], query_mask: Array, num_kv_pairs: in
         "dW2_norm",
     ):
         x = trace[name]
-        metrics[f"diag/{name}_mean"] = mean_all(x)
-        metrics[f"diag/{name}_max"] = jnp.max(x)
-        metrics[f"diag/{name}_prefix_key_mean"] = mean_role(x, prefix_key_mask)
-        metrics[f"diag/{name}_prefix_value_mean"] = mean_role(x, prefix_value_mask)
-        metrics[f"diag/{name}_query_mean"] = mean_role(x, query_mask)
-        metrics[f"diag/{name}_noise_mean"] = mean_role(x, noise_mask)
+        metrics[f"memory/{name}/mean"] = mean_all(x)
+        metrics[f"memory/{name}/max"] = jnp.max(x)
+        metrics[f"memory/{name}/prefix_key_mean"] = mean_role(x, prefix_key_mask)
+        metrics[f"memory/{name}/prefix_value_mean"] = mean_role(x, prefix_value_mask)
+        metrics[f"memory/{name}/query_mean"] = mean_role(x, query_mask)
+        metrics[f"memory/{name}/noise_mean"] = mean_role(x, noise_mask)
 
     for name in ("W1_norm", "W2_norm", "mW1_norm", "mW2_norm"):
         x = trace[name]
-        metrics[f"diag/{name}_final"] = jnp.mean(x[:, -1])
-        metrics[f"diag/{name}_max"] = jnp.max(x)
+        metrics[f"memory/{name}/final"] = jnp.mean(x[:, -1])
+        metrics[f"memory/{name}/max"] = jnp.max(x)
 
     all_finite = jnp.array(1.0)
     for x in trace.values():
         all_finite = all_finite * jnp.all(jnp.isfinite(x)).astype(jnp.float32)
-    metrics["diag/trace_all_finite"] = all_finite
+    metrics["health/trace_all_finite"] = all_finite
     return metrics
 
 
@@ -498,7 +498,7 @@ def init_wandb(args, cfg):
     except ModuleNotFoundError as exc:
         raise SystemExit(
             "wandb is not installed. Run: "
-            "uv run --with wandb python titans.py --wandb"
+            "uv run --group experiment python titans.py --wandb"
         ) from exc
 
     config = {

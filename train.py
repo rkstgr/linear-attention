@@ -57,7 +57,16 @@ def evaluate(model, data, batch_size: int) -> float:
     return float(jnp.mean(jnp.stack(accs)))
 
 
-def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
+def train_and_eval(
+    model,
+    cfg: Config,
+    key,
+    opt=None,
+    log_fn=None,
+    *,
+    fail_fast_nonfinite: bool = True,
+    return_info: bool = False,
+):
     """Train `model` on MQAR per `cfg` with early stopping.
 
     Pre-generates a fixed train and test split (Zoology-style caching), runs
@@ -67,8 +76,11 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
     If `opt` is None, uses plain AdamW(cfg.learning_rate). Pass an explicit
     optax optimizer (e.g. with warmup or decay) to override. If `log_fn` is
     passed, it receives `(metrics, model)` at the same cadence as stdout.
+    With `fail_fast_nonfinite=True`, the loop stops at the first non-finite
+    loss/optimizer/model norm and returns the last known finite model.
 
     Returns (trained_model, history) where history is a list of per-epoch dicts.
+    If `return_info=True`, also returns a stop-info dict.
     """
     k_train, k_test, k_loop = jax.random.split(key, 3)
     train_data = make_split(k_train, cfg.n_train, cfg)
@@ -91,7 +103,10 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
         update_norm = tree_l2_norm(updates)
         model = eqx.apply_updates(model, updates)
         param_norm = tree_l2_norm(model)
-        return model, opt_state, loss, acc, grad_norm, update_norm, param_norm
+        all_finite = jnp.all(
+            jnp.isfinite(jnp.stack([loss, acc, grad_norm, update_norm, param_norm]))
+        )
+        return model, opt_state, loss, acc, grad_norm, update_norm, param_norm, all_finite
 
     n_full = (cfg.n_train // cfg.batch_size) * cfg.batch_size
     n_batches = n_full // cfg.batch_size
@@ -105,6 +120,18 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
     patience = 0
     history = []
     global_step = 0
+    stop_info = {
+        "stop_reason": "max_epochs",
+        "nonfinite": False,
+        "nonfinite_epoch": None,
+        "nonfinite_step": None,
+        "nonfinite_global_step": None,
+        "nonfinite_loss": None,
+        "nonfinite_grad_norm": None,
+        "nonfinite_update_norm": None,
+        "nonfinite_param_norm": None,
+    }
+    should_stop = False
 
     for epoch in range(cfg.max_epochs):
         k_loop, k_perm = jax.random.split(k_loop)
@@ -112,28 +139,92 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
         idx = perm.reshape(-1, cfg.batch_size)
 
         losses, accs = [], []
-        # Track wall-clock between log points; float(loss) below forces sync,
-        # so the delta is honest. First reading includes JIT compile.
+        # Track wall-clock between log points. The first reading includes JIT
+        # compile; non-finite checks synchronize once per step.
         last_log_t = time.perf_counter()
         last_log_step = 0
         for i, batch_idx in enumerate(idx):
             x = train_tokens[batch_idx]
             y = train_targets[batch_idx]
             m = train_mask[batch_idx]
-            model, opt_state, loss, acc, grad_norm, update_norm, param_norm = step(
+            prev_model = model
+            prev_opt_state = opt_state
+            (
+                model,
+                opt_state,
+                loss,
+                acc,
+                grad_norm,
+                update_norm,
+                param_norm,
+                all_finite,
+            ) = step(
                 model, opt_state, x, y, m
             )
             global_step += 1
+            all_finite_b = bool(all_finite)
+            loss_f = float(loss)
+            acc_f = float(acc)
+            grad_norm_f = float(grad_norm)
+            update_norm_f = float(update_norm)
+            param_norm_f = float(param_norm)
+
+            if fail_fast_nonfinite and not all_finite_b:
+                model = prev_model
+                opt_state = prev_opt_state
+                now = time.perf_counter()
+                ms = (now - last_log_t) / max((i + 1) - last_log_step, 1) * 1000
+                stop_info.update(
+                    {
+                        "stop_reason": "nonfinite",
+                        "nonfinite": True,
+                        "nonfinite_epoch": epoch,
+                        "nonfinite_step": i + 1,
+                        "nonfinite_global_step": global_step,
+                        "nonfinite_loss": loss_f,
+                        "nonfinite_grad_norm": grad_norm_f,
+                        "nonfinite_update_norm": update_norm_f,
+                        "nonfinite_param_norm": param_norm_f,
+                    }
+                )
+                print(
+                    f"non-finite stop @ epoch {epoch} step {i + 1}/{n_batches}: "
+                    f"loss {loss_f}  grad_norm {grad_norm_f}  "
+                    f"update_norm {update_norm_f}  param_norm {param_norm_f}"
+                )
+                if log_fn is not None:
+                    log_fn(
+                        {
+                            "kind": "nonfinite",
+                            "epoch": epoch,
+                            "step": i + 1,
+                            "global_step": global_step,
+                            "learning/train_loss": loss_f,
+                            "learning/train_acc": acc_f,
+                            "runtime/ms_per_step": ms,
+                            "stability/grad_norm": grad_norm_f,
+                            "stability/update_norm": update_norm_f,
+                            "stability/param_norm": param_norm_f,
+                            "health/all_finite": 0.0,
+                            "health/nonfinite": 1.0,
+                            "health/nonfinite_epoch": epoch,
+                            "health/nonfinite_step": i + 1,
+                            "health/nonfinite_global_step": global_step,
+                        },
+                        model,
+                    )
+                should_stop = True
+                break
+
             losses.append(loss)
             accs.append(acc)
             # always log step 1 (JIT compile done) + every log_every after
             if i == 0 or (i + 1) % log_every == 0:
-                loss_f = float(loss)  # blocks on dispatch
                 now = time.perf_counter()
                 ms = (now - last_log_t) / ((i + 1) - last_log_step) * 1000
                 print(
                     f"  epoch {epoch:3d} step {i + 1:4d}/{n_batches}  "
-                    f"loss {loss_f:.4f}  acc {float(acc):.3f}  "
+                    f"loss {loss_f:.4f}  acc {acc_f:.3f}  "
                     f"{ms:7.1f} ms/step"
                 )
                 if log_fn is not None:
@@ -143,17 +234,22 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
                             "epoch": epoch,
                             "step": i + 1,
                             "global_step": global_step,
-                            "train/loss": loss_f,
-                            "train/acc": float(acc),
-                            "perf/ms_per_step": ms,
-                            "optim/grad_norm": float(grad_norm),
-                            "optim/update_norm": float(update_norm),
-                            "model/param_norm": float(param_norm),
+                            "learning/train_loss": loss_f,
+                            "learning/train_acc": acc_f,
+                            "runtime/ms_per_step": ms,
+                            "stability/grad_norm": grad_norm_f,
+                            "stability/update_norm": update_norm_f,
+                            "stability/param_norm": param_norm_f,
+                            "health/all_finite": 1.0,
+                            "health/nonfinite": 0.0,
                         },
                         model,
                     )
                 last_log_t = now
                 last_log_step = i + 1
+
+        if should_stop:
+            break
 
         train_loss = float(jnp.mean(jnp.stack(losses)))
         train_acc = float(jnp.mean(jnp.stack(accs)))
@@ -177,9 +273,10 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
                     "kind": "epoch",
                     "epoch": epoch,
                     "global_step": global_step,
-                    "epoch/train_loss": train_loss,
-                    "epoch/train_acc": train_acc,
-                    "epoch/test_acc": test_acc,
+                    "learning/epoch_train_loss": train_loss,
+                    "learning/epoch_train_acc": train_acc,
+                    "learning/test_acc": test_acc,
+                    "health/nonfinite": 0.0,
                 },
                 model,
             )
@@ -188,6 +285,7 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
             print(
                 f"early stop @ epoch {epoch}: test_acc {test_acc:.3f} >= {cfg.target_acc}"
             )
+            stop_info["stop_reason"] = "target_acc"
             break
         if test_acc > best_acc + 1e-3:
             best_acc = test_acc
@@ -199,8 +297,11 @@ def train_and_eval(model, cfg: Config, key, opt=None, log_fn=None):
                     f"early stop @ epoch {epoch}: no improvement for "
                     f"{cfg.patience_epochs} epochs (best {best_acc:.3f})"
                 )
+                stop_info["stop_reason"] = "patience"
                 break
 
+    if return_info:
+        return model, history, stop_info
     return model, history
 
 

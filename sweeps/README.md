@@ -2,7 +2,8 @@
 
 The sweep YAML files are hardware-agnostic. Pick CPU vs CUDA at the agent
 launcher layer, then every sampled run uses the same project environment via
-`uv run --no-sync`.
+`uv run --no-sync`. Sweeps optimize `objective/score`, which is best test
+accuracy minus a small penalty for non-finite training runs.
 
 Create a sweep:
 
@@ -26,3 +27,13 @@ CUDA agents export `JAX_PLATFORMS=cuda,cpu`, disable XLA memory preallocation
 by default, and set `REQUIRE_JAX_GPU=1`. If JAX falls back to CPU, the run exits
 before training. W&B records `jax_backend`, `jax_devices`,
 `runtime/jax_has_gpu`, and FLOP estimates for comparability.
+
+W&B metrics are grouped by top-level prefix:
+
+- `objective`: sweep score and final/best accuracy.
+- `learning`: train/test loss and accuracy curves.
+- `stability`: gradient, update, and parameter norms.
+- `memory`: Titans fast-memory gates, norms, and update magnitudes.
+- `lookup`: fixed-example associative recall behavior.
+- `health`: non-finite flags and stop metadata.
+- `runtime` and `compute`: backend, timing, and FLOP estimates.
