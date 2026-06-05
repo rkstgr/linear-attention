@@ -89,8 +89,17 @@ uv run python bench_chunkwise_plot.py
 ## Setup
 
 ```
-uv sync                  # CPU only
-uv sync --group cuda     # + NVIDIA GPU (Linux x86_64)
+uv sync                              # CPU only
+uv sync --group experiment           # + W&B sweep tooling
+uv sync --group cuda --group experiment  # + NVIDIA GPU on Linux x86_64
+```
+
+For W&B sweeps, create the sweep from any machine and run agents with:
+
+```
+uv run --group experiment wandb sweep sweeps/titans_level1.yaml
+scripts/run_wandb_agent_cpu.sh <entity/project/sweep_id> --count 30
+scripts/run_wandb_agent_cuda.sh <entity/project/sweep_id> --count 30
 ```
 
 ## Run a single model

@@ -11,8 +11,7 @@ early_terminate:
 command:
   - uv
   - run
-  - --with
-  - wandb
+  - --no-sync
   - python
   - ${program}
 parameters:

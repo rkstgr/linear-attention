@@ -1,11 +1,12 @@
 """W&B sweep entrypoint for the Titans MQAR curriculum.
 
 Run one sampled config:
-    uv run --with wandb python sweep_titans_toy.py
+    uv run --group experiment python sweep_titans_toy.py
 
 Create and launch the sweep:
-    uv run --with wandb wandb sweep sweeps/titans_toy.yaml
-    uv run --with wandb wandb agent <entity/project/sweep_id>
+    uv run --group experiment wandb sweep sweeps/titans_toy.yaml
+    scripts/run_wandb_agent_cpu.sh <entity/project/sweep_id>
+    scripts/run_wandb_agent_cuda.sh <entity/project/sweep_id> --count 30
 """
 
 import dataclasses
@@ -23,6 +24,41 @@ from train import train_and_eval
 
 CONV_SIZE = 4
 TRAIN_FLOP_MULTIPLIER = 3.0
+GPU_PLATFORMS = {"cuda", "gpu"}
+
+
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def jax_device_summary(devices) -> str:
+    pieces = []
+    for device in devices:
+        device_id = getattr(device, "id", "?")
+        device_kind = getattr(device, "device_kind", "")
+        label = f"{device.platform}:{device_id}"
+        if device_kind:
+            label = f"{label}:{device_kind}"
+        pieces.append(label)
+    return ",".join(pieces)
+
+
+def jax_runtime_info():
+    try:
+        backend = jax.default_backend()
+        devices = jax.devices()
+    except Exception as exc:
+        if env_flag("REQUIRE_JAX_GPU"):
+            raise SystemExit(
+                "REQUIRE_JAX_GPU=1 but JAX could not initialize devices. "
+                f"JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS', '')!r}. "
+                "Check the CUDA driver and JAX CUDA dependency group."
+            ) from exc
+        raise
+    has_gpu = backend in GPU_PLATFORMS or any(
+        device.platform in GPU_PLATFORMS for device in devices
+    )
+    return backend, devices, has_gpu
 
 
 def count_params(model) -> int:
@@ -81,12 +117,22 @@ def parse_args():
 
 def main():
     args = parse_args()
+    jax_backend, jax_devices, jax_has_gpu = jax_runtime_info()
+    jax_devices_str = jax_device_summary(jax_devices)
+    if env_flag("REQUIRE_JAX_GPU") and not jax_has_gpu:
+        raise SystemExit(
+            "REQUIRE_JAX_GPU=1 but JAX did not initialize a GPU. "
+            f"backend={jax_backend!r} devices={jax_devices_str!r}. "
+            "Run the CUDA agent from a Linux x86_64 GPU VM after "
+            "`uv sync --group cuda --group experiment`."
+        )
+
     try:
         import wandb
     except ModuleNotFoundError as exc:
         raise SystemExit(
             "wandb is not installed. Run with: "
-            "uv run --with wandb python sweep_titans_toy.py"
+            "uv run --group experiment python sweep_titans_toy.py"
         ) from exc
 
     run = wandb.init()
@@ -151,6 +197,10 @@ def main():
             "vocab_size": cfg.vocab_size,
             "input_seq_len": cfg.input_seq_len,
             "num_kv_pairs": cfg.num_kv_pairs,
+            "jax_backend": jax_backend,
+            "jax_devices": jax_devices_str,
+            "jax_platforms_env": os.environ.get("JAX_PLATFORMS", ""),
+            "require_jax_gpu": env_flag("REQUIRE_JAX_GPU"),
             "param_count": param_count,
             "forward_flops_per_example": forward_flops,
             "forward_flops_per_token": forward_flops / cfg.input_seq_len,
@@ -162,6 +212,9 @@ def main():
     run.log(
         {
             "model/params": param_count,
+            "runtime/jax_backend_cpu": 1.0 if jax_backend == "cpu" else 0.0,
+            "runtime/jax_backend_gpu": 1.0 if jax_has_gpu else 0.0,
+            "runtime/jax_has_gpu": 1.0 if jax_has_gpu else 0.0,
             "compute/forward_flops_per_example": forward_flops,
             "compute/forward_flops_per_token": forward_flops / cfg.input_seq_len,
             "compute/train_flops_per_step_est": train_flops_per_step,
