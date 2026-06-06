@@ -14,9 +14,10 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 
 import jax
 
-from linattn.data import CONFIGS
+from experiments.mqar import MQAR_CONFIGS, resolve
 from linattn.models.factory import MIXERS, build_lm_model
-from linattn.train import inspect_example, train_and_eval
+from linattn.tasks.base import build_task
+from linattn.train import fit
 
 DISPLAY_NAMES = {
     "transformer": "Transformer",
@@ -30,7 +31,7 @@ DISPLAY_NAMES = {
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("mixer", choices=sorted(MIXERS))
-    parser.add_argument("--config", choices=sorted(CONFIGS), default="level1")
+    parser.add_argument("--config", choices=sorted(MQAR_CONFIGS), default="level1")
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--n-heads", type=int, default=4)
     parser.add_argument("--n-layers", type=int, default=2)
@@ -42,9 +43,10 @@ def parse_args():
 
 def main():
     args = parse_args()
-    cfg = CONFIGS[args.config]
+    data_cfg, train_cfg = resolve(args.config)
+    task = build_task(data_cfg)
     name = DISPLAY_NAMES.get(args.mixer, args.mixer)
-    print(f"--- MQAR ({name}, config={args.config}, vocab={cfg.vocab_size}) ---")
+    print(f"--- MQAR ({name}, config={args.config}, vocab={data_cfg.vocab_size}) ---")
     k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
     mixer_kwargs = {}
     if args.mixer == "titans":
@@ -55,7 +57,7 @@ def main():
 
     model = build_lm_model(
         args.mixer,
-        vocab_size=cfg.vocab_size,
+        vocab_size=data_cfg.vocab_size,
         dim=args.dim,
         n_heads=args.n_heads,
         n_layers=args.n_layers,
@@ -63,8 +65,8 @@ def main():
         key=k_model,
         **mixer_kwargs,
     )
-    model, _ = train_and_eval(model, cfg, k_train)
-    inspect_example(model, k_inspect, cfg)
+    result = fit(model, task, train_cfg, k_train)
+    task.describe(result.model, k_inspect)
 
 
 if __name__ == "__main__":

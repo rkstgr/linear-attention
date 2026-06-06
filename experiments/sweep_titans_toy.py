@@ -9,7 +9,6 @@ Create and launch the sweep:
     scripts/run_wandb_agent_cuda.sh <entity/project/sweep_id> --count 30
 """
 
-import dataclasses
 import os
 import argparse
 
@@ -18,9 +17,10 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 import jax
 import equinox as eqx
 
-from linattn.data import CONFIGS
+from experiments.mqar import MQAR_CONFIGS, resolve
 from linattn.models.factory import build_lm_model
-from linattn.train import train_and_eval
+from linattn.tasks.base import build_task
+from linattn.train import WandbReporter, fit
 
 CONV_SIZE = 4
 TRAIN_FLOP_MULTIPLIER = 3.0
@@ -116,7 +116,7 @@ def estimate_forward_flops_per_example(
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config-name", choices=sorted(CONFIGS))
+    parser.add_argument("--config-name", choices=sorted(MQAR_CONFIGS))
     parser.add_argument("--n-train", type=int)
     parser.add_argument("--n-test", type=int)
     parser.add_argument("--batch-size", type=int)
@@ -156,17 +156,18 @@ def main():
         return wc.get(name, default)
 
     config_name = value("config_name", "toy")
-    base_cfg = CONFIGS[config_name]
-    cfg = dataclasses.replace(
-        base_cfg,
-        n_train=int(value("n_train", base_cfg.n_train)),
-        n_test=int(value("n_test", base_cfg.n_test)),
-        batch_size=int(value("batch_size", base_cfg.batch_size)),
-        eval_batch_size=int(value("eval_batch_size", base_cfg.eval_batch_size)),
-        max_epochs=int(value("max_epochs", base_cfg.max_epochs)),
-        learning_rate=float(value("learning_rate", base_cfg.learning_rate)),
-        patience_epochs=int(value("patience_epochs", base_cfg.patience_epochs)),
+    base_data, base_train = resolve(config_name)
+    data_cfg, train_cfg = resolve(
+        config_name,
+        n_train=int(value("n_train", base_data.n_train)),
+        n_test=int(value("n_test", base_data.n_test)),
+        batch_size=int(value("batch_size", base_train.batch_size)),
+        eval_batch_size=int(value("eval_batch_size", base_train.eval_batch_size)),
+        max_epochs=int(value("max_epochs", base_train.max_epochs)),
+        learning_rate=float(value("learning_rate", base_train.learning_rate)),
+        patience_epochs=int(value("patience_epochs", base_train.patience_epochs)),
     )
+    task = build_task(data_cfg)
 
     seed = int(value("seed", 1))
     key = jax.random.PRNGKey(seed)
@@ -181,7 +182,7 @@ def main():
 
     model = build_lm_model(
         "titans",
-        vocab_size=cfg.vocab_size,
+        vocab_size=data_cfg.vocab_size,
         dim=dim,
         n_heads=n_heads,
         n_layers=n_layers,
@@ -193,30 +194,30 @@ def main():
 
     param_count = count_params(model)
     forward_flops = estimate_forward_flops_per_example(
-        vocab_size=cfg.vocab_size,
-        seq_len=cfg.input_seq_len,
+        vocab_size=data_cfg.vocab_size,
+        seq_len=data_cfg.input_seq_len,
         dim=dim,
         n_heads=n_heads,
         n_layers=n_layers,
         mlp_mult=mlp_mult,
         memory_mult=memory_mult,
     )
-    steps_per_epoch = cfg.n_train // cfg.batch_size
-    train_flops_per_step = int(TRAIN_FLOP_MULTIPLIER * forward_flops * cfg.batch_size)
+    steps_per_epoch = data_cfg.n_train // train_cfg.batch_size
+    train_flops_per_step = int(TRAIN_FLOP_MULTIPLIER * forward_flops * train_cfg.batch_size)
     update_unlocked_config(
         run,
         wc,
         {
-            "vocab_size": cfg.vocab_size,
-            "input_seq_len": cfg.input_seq_len,
-            "num_kv_pairs": cfg.num_kv_pairs,
+            "vocab_size": data_cfg.vocab_size,
+            "input_seq_len": data_cfg.input_seq_len,
+            "num_kv_pairs": data_cfg.num_kv_pairs,
             "jax_backend": jax_backend,
             "jax_devices": jax_devices_str,
             "jax_platforms_env": os.environ.get("JAX_PLATFORMS", ""),
             "require_jax_gpu": env_flag("REQUIRE_JAX_GPU"),
             "param_count": param_count,
             "forward_flops_per_example": forward_flops,
-            "forward_flops_per_token": forward_flops / cfg.input_seq_len,
+            "forward_flops_per_token": forward_flops / data_cfg.input_seq_len,
             "train_flops_per_step_est": train_flops_per_step,
             "train_flop_multiplier_est": TRAIN_FLOP_MULTIPLIER,
             "nonfinite_score_penalty": NONFINITE_SCORE_PENALTY,
@@ -230,24 +231,15 @@ def main():
             "runtime/jax_has_gpu": 1.0 if jax_has_gpu else 0.0,
             "runtime/has_gpu": 1.0 if jax_has_gpu else 0.0,
             "compute/forward_flops_per_example": forward_flops,
-            "compute/forward_flops_per_token": forward_flops / cfg.input_seq_len,
+            "compute/forward_flops_per_token": forward_flops / data_cfg.input_seq_len,
             "compute/train_flops_per_step_est": train_flops_per_step,
         },
         step=0,
     )
 
-    def log_fn(metrics, model):
-        payload = {k: v for k, v in metrics.items() if k != "kind"}
-        run.log(payload, step=metrics["global_step"])
-
-    model, history, train_info = train_and_eval(
-        model,
-        cfg,
-        k_train,
-        log_fn=log_fn,
-        fail_fast_nonfinite=True,
-        return_info=True,
-    )
+    result = fit(model, task, train_cfg, k_train, reporter=WandbReporter(run))
+    history = result.history
+    train_info = result.stop_info
 
     best_record = max(history, key=lambda h: h["test_acc"], default=None)
     best_test_acc = best_record["test_acc"] if best_record is not None else 0.0

@@ -28,18 +28,27 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 
-from linattn.data import Config, level1
+from linattn.config import TrainConfig
+from linattn.tasks.mqar import MQARConfig
 
 
-# vocab > T at the largest T (assertion in data.py). 1024 > 512.
-CFG = dataclasses.replace(
-    level1,
+# vocab > T at the largest T (assertion in the task). 1024 > 512.
+# N_KV=4 is well below head_dim=16; capacity is not the variable here.
+BASE_DATA = MQARConfig(
     vocab_size=1024,
-    num_kv_pairs=4,        # well below head_dim=16; capacity is not the variable
+    input_seq_len=64,      # overridden per cell
+    num_kv_pairs=4,
+    power_a=0.01,
     n_train=20_000,
+    n_test=1_000,
+)
+TRAIN = TrainConfig(
+    batch_size=64,
+    eval_batch_size=64,
     max_epochs=16,
-    patience_epochs=999,
     learning_rate=3e-3,
+    target_acc=0.99,
+    patience_epochs=999,
 )
 
 TS = [64, 512]             # short → noise negligible; long → noise dominates
@@ -51,8 +60,10 @@ MODEL_SPECS = [
 
 SHARED_SOURCES = [
     "linattn/train.py",
-    "linattn/data.py",
+    "linattn/config.py",
     "linattn/utils.py",
+    "linattn/tasks/base.py",
+    "linattn/tasks/mqar.py",
     "linattn/models/backbone.py",
     "linattn/models/factory.py",
     "linattn/models/ffn.py",
@@ -74,12 +85,14 @@ def _worker(spec):
 
     from linattn.cache import cached
     from linattn.models.factory import build_lm_model
-    from linattn.train import train_and_eval
+    from linattn.tasks.base import build_task
+    from linattn.train import fit
 
-    cfg = Config(**spec["cfg_kwargs"])
+    data_cfg = MQARConfig(**spec["data_kwargs"])
+    train_cfg = TrainConfig(**spec["train_kwargs"])
     cache_key = {
         "label": spec["label"], "T": spec["T"],
-        "cfg": spec["cfg_kwargs"], "model": ARCH,
+        "data": spec["data_kwargs"], "train": spec["train_kwargs"], "model": ARCH,
     }
     sources = [MIXER_SOURCES[spec["mixer"]], *SHARED_SOURCES]
     hit, save = cached(cache_key, sources, rerun=spec["rerun"])
@@ -87,23 +100,26 @@ def _worker(spec):
         return (spec["T"], spec["label"], hit["best"], "cached")
 
     k_model, k_train = jax.random.split(jax.random.PRNGKey(1))
-    model = build_lm_model(spec["mixer"], cfg.vocab_size, 64, 4, 2, 4, k_model)
-    opt = optax.adamw(cfg.learning_rate)
-    _, history = train_and_eval(model, cfg, k_train, opt=opt)
-    best = max(h["test_acc"] for h in history)
-    save({"best": best, "history": history})
+    model = build_lm_model(spec["mixer"], data_cfg.vocab_size, 64, 4, 2, 4, k_model)
+    task = build_task(data_cfg)
+    opt = optax.adamw(train_cfg.learning_rate)
+    result = fit(model, task, train_cfg, k_train, opt=opt)
+    best = max(h["test_acc"] for h in result.history)
+    save({"best": best, "history": result.history})
     return (spec["T"], spec["label"], best, "fresh")
 
 
 def _make_specs(rerun: bool):
     specs = []
+    train_kwargs = dataclasses.asdict(TRAIN)
     for T in TS:
-        cfg = dataclasses.replace(CFG, input_seq_len=T)
-        cfg_kwargs = dataclasses.asdict(cfg)
+        data_cfg = dataclasses.replace(BASE_DATA, input_seq_len=T)
+        data_kwargs = dataclasses.asdict(data_cfg)
         for m in MODEL_SPECS:
             specs.append({
                 "label": m["label"], "mixer": m["mixer"],
-                "cfg_kwargs": cfg_kwargs, "T": T, "rerun": rerun,
+                "data_kwargs": data_kwargs, "train_kwargs": train_kwargs,
+                "T": T, "rerun": rerun,
             })
     return specs
 
