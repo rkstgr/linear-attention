@@ -27,25 +27,30 @@ import dataclasses
 import json
 from pathlib import Path
 
-from linattn.data import level1
+from linattn.config import ModelConfig, RunConfig, TrainConfig
 from linattn.executor import executor_main
-from experiments.defaults import (
-    ModelConfig,
-    RunConfig,
-    config_from_data_config,
-    default_train,
-)
+from linattn.runner import default_train
+from linattn.tasks.mqar import MQARConfig
 
 
 # d_head = dim / n_heads = 64 / 4 = 16 → capacity ceiling at N_KV ≈ 16.
-CFG = dataclasses.replace(
-    level1,
-    vocab_size=256,        # 30× cheaper lm_head than vocab=8192; mechanism unchanged
-    input_seq_len=128,     # T ≥ 4·N_KV at N_KV=32
+# vocab=256: 30× cheaper lm_head than vocab=8192, mechanism unchanged.
+# T=128 ≥ 4·N_KV at N_KV=32.
+BASE_DATA = MQARConfig(
+    vocab_size=256,
+    input_seq_len=128,
+    num_kv_pairs=4,        # overridden per cell
+    power_a=0.01,
     n_train=20_000,
+    n_test=1_000,
+)
+TRAIN = TrainConfig(
+    batch_size=64,
+    eval_batch_size=64,
     max_epochs=16,
-    patience_epochs=999,   # DN has a long flat init phase at high N_KV
     learning_rate=3e-3,
+    target_acc=0.99,
+    patience_epochs=999,   # DN has a long flat init phase at high N_KV
 )
 
 N_KVS = [4, 32]            # below ceiling, above ceiling
@@ -62,23 +67,21 @@ ARCH_KWARGS = {"dim": 64, "n_heads": 4, "n_layers": 2, "mlp_mult": 4}
 def _make_specs():
     specs = []
     for n_kv in N_KVS:
-        cfg = dataclasses.replace(CFG, num_kv_pairs=n_kv)
         for m in MODEL_SPECS:
             specs.append({
-                "label": m["label"], "mixer": m["mixer"],
-                "cfg": cfg, "n_kv": n_kv,
+                "label": m["label"], "mixer": m["mixer"], "n_kv": n_kv,
             })
     return specs
 
 
 def _make_step(spec):
-    data_cfg, train_cfg = config_from_data_config(spec["cfg"])
+    data_cfg = dataclasses.replace(BASE_DATA, num_kv_pairs=spec["n_kv"])
     model_cfg = ModelConfig(
         mixer=spec["mixer"],
-        vocab_size=spec["cfg"].vocab_size,
+        vocab_size=data_cfg.vocab_size,
         **ARCH_KWARGS,
     )
-    run = RunConfig(model=model_cfg, data=data_cfg, train=train_cfg, seed=1)
+    run = RunConfig(model=model_cfg, task=data_cfg, train=TRAIN, seed=1)
     return default_train(f"capacity/{spec['mixer']}/nkv{spec['n_kv']}", run)
 
 
