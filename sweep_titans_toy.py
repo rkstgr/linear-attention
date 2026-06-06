@@ -19,7 +19,7 @@ import jax
 import equinox as eqx
 
 from data import CONFIGS
-from titans import Transformer, make_wandb_logger
+from models.registry import build_lm_model
 from train import train_and_eval
 
 CONV_SIZE = 4
@@ -123,7 +123,6 @@ def parse_args():
     parser.add_argument("--eval-batch-size", type=int)
     parser.add_argument("--max-epochs", type=int)
     parser.add_argument("--patience-epochs", type=int)
-    parser.add_argument("--diagnostics", action=argparse.BooleanOptionalAction)
     return parser.parse_args()
 
 
@@ -180,7 +179,8 @@ def main():
     memory_mult = int(value("memory_mult", 4))
     max_inner_lr = float(value("max_inner_lr", 0.005))
 
-    model = Transformer(
+    model = build_lm_model(
+        "titans",
         vocab_size=cfg.vocab_size,
         dim=dim,
         n_heads=n_heads,
@@ -236,12 +236,10 @@ def main():
         step=0,
     )
 
-    diagnostics = value("diagnostics", True)
-    log_fn = make_wandb_logger(
-        run,
-        cfg,
-        diagnostics_enabled=bool(diagnostics),
-    )
+    def log_fn(metrics, model):
+        payload = {k: v for k, v in metrics.items() if k != "kind"}
+        run.log(payload, step=metrics["global_step"])
+
     model, history, train_info = train_and_eval(
         model,
         cfg,

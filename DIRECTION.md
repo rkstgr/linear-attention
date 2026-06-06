@@ -16,8 +16,8 @@ scale*? The program exists to separate the two.
 ## In scope
 
 - **Mechanisms** — `transformer` (softmax), `linear_attention`, `deltanet`
-  (plain + gated), `titans`. One mixer per file; the only line that changes is
-  `self.attn = ...`.
+  (plain + gated), `titans`. Each mixer lives in `models/`; the shared LM
+  scaffold is selected by registry name.
 - **Tasks** — MQAR today (`data.py`, from Zoology); addition next.
 - **Regime today** — toy: `dim≈64`, `head_dim≈16`, `T∈{64..512}`, minutes on CPU.
   Every belief below is **toy-scale until shown otherwise**.

@@ -1,14 +1,7 @@
-"""Decoder-only transformer with modern defaults (RMSNorm, RoPE, SwiGLU).
-
-This is the softmax baseline. Every later model in this directory is a
-drop-in replacement for `Attention` that changes how the sequence mixes
-tokens. Normalization, MLP, and residual structure stay the same.
-
-Run:
-    uv run python transformer.py
-"""
+"""Softmax attention mixer."""
 
 import os
+
 os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 
 import equinox as eqx
@@ -19,11 +12,12 @@ from jax import Array
 
 from data import level1
 from train import inspect_example, train_and_eval
-from utils import RMSNorm, SwiGLU, apply_rope, rope_freqs
+from utils import apply_rope, rope_freqs
 
 
 class Attention(eqx.Module):
     """Standard multi-head causal softmax attention."""
+
     Wq: Array
     Wk: Array
     Wv: Array
@@ -42,91 +36,31 @@ class Attention(eqx.Module):
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
 
-    def __call__(self, x: Array, cos: Array, sin: Array) -> Array:
-        # x: (T, D)
+    def __call__(self, x: Array) -> Array:
         T, D = x.shape
         H, Dh = self.n_heads, self.head_dim
 
-        # project and split heads: (T, D) -> (H, T, Dh)
         q = (x @ self.Wq).reshape(T, H, Dh).transpose(1, 0, 2)
         k = (x @ self.Wk).reshape(T, H, Dh).transpose(1, 0, 2)
         v = (x @ self.Wv).reshape(T, H, Dh).transpose(1, 0, 2)
 
+        cos, sin = rope_freqs(Dh, T)
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
-        # scaled dot-product attention per head
-        scores = q @ k.transpose(0, 2, 1) / jnp.sqrt(Dh)       # (H, T, T)
+        scores = q @ k.transpose(0, 2, 1) / jnp.sqrt(Dh)
         mask = jnp.tril(jnp.ones((T, T), dtype=bool))
         scores = jnp.where(mask, scores, -jnp.inf)
-        probs = jax.nn.softmax(scores, axis=-1)                # (H, T, T)
-        out = probs @ v                                        # (H, T, Dh)
+        probs = jax.nn.softmax(scores, axis=-1)
+        out = probs @ v
 
-        # merge heads: (H, T, Dh) -> (T, D)
         out = out.transpose(1, 0, 2).reshape(T, D)
         return out @ self.Wo
 
 
-class Block(eqx.Module):
-    """Pre-norm residual block: attention + MLP."""
-    norm_attn: RMSNorm
-    attn: Attention
-    norm_mlp: RMSNorm
-    mlp: SwiGLU
+def main():
+    from models.registry import build_lm_model
 
-    def __init__(self, dim: int, n_heads: int, mlp_mult: int, key):
-        k_attn, k_mlp = jax.random.split(key)
-        self.norm_attn = RMSNorm(dim)
-        self.attn = Attention(dim, n_heads, k_attn)
-        self.norm_mlp = RMSNorm(dim)
-        self.mlp = SwiGLU(dim, mlp_mult * dim, k_mlp)
-
-    def __call__(self, x: Array, cos: Array, sin: Array) -> Array:
-        x = x + self.attn(self.norm_attn(x), cos, sin)
-        x = x + self.mlp(self.norm_mlp(x))
-        return x
-
-
-class Transformer(eqx.Module):
-    tok_emb: Array
-    blocks: list
-    final_norm: RMSNorm
-    lm_head: Array
-    head_dim: int = eqx.field(static=True)
-
-    def __init__(
-        self,
-        vocab_size: int,
-        dim: int,
-        n_heads: int,
-        n_layers: int,
-        mlp_mult: int,
-        key,
-    ):
-        keys = jax.random.split(key, n_layers + 2)
-        s = 1.0 / jnp.sqrt(dim)
-        self.tok_emb = jax.random.normal(keys[0], (vocab_size, dim)) * s
-        self.blocks = [Block(dim, n_heads, mlp_mult, k) for k in keys[1:-1]]
-        self.final_norm = RMSNorm(dim)
-        self.lm_head = jax.random.normal(keys[-1], (dim, vocab_size)) * s
-        self.head_dim = dim // n_heads
-
-    def __call__(self, tokens: Array) -> Array:
-        # tokens: (T,) int -> logits: (T, V)
-        T = tokens.shape[0]
-        x = self.tok_emb[tokens]                       # (T, D)
-        cos, sin = rope_freqs(self.head_dim, T)        # (T, Dh/2) each
-        for block in self.blocks:
-            x = block(x, cos, sin)
-        x = self.final_norm(x)
-        return x @ self.lm_head                        # (T, V)
-
-
-# ---------------------------------------------------------------------------
-# Toy training: character LM on a repeated sentence. Should overfit fast.
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
     text = "the quick brown fox jumps over the lazy dog. " * 64
     chars = sorted(set(text))
     vocab_size = len(chars)
@@ -137,7 +71,8 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(0)
     k_model, k_data = jax.random.split(key)
 
-    model = Transformer(
+    model = build_lm_model(
+        "transformer",
         vocab_size=vocab_size,
         dim=64,
         n_heads=4,
@@ -186,15 +121,12 @@ if __name__ == "__main__":
         tokens = tokens.at[pos].set(jnp.argmax(logits))
     print("\nsample:", "".join(chars[int(t)] for t in tokens))
 
-    # -----------------------------------------------------------------------
-    # MQAR (level1 — Zoology baseline: vocab=8192, seq=64, N_KV=4, power-law
-    # gaps). Softmax attention should hit >99% accuracy in 1–2 epochs.
-    # -----------------------------------------------------------------------
     cfg = level1
     print(f"\n--- MQAR (transformer, vocab={cfg.vocab_size}) ---")
     k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
 
-    model = Transformer(
+    model = build_lm_model(
+        "transformer",
         vocab_size=cfg.vocab_size,
         dim=64,
         n_heads=4,
@@ -204,3 +136,7 @@ if __name__ == "__main__":
     )
     model, _ = train_and_eval(model, cfg, k_train)
     inspect_example(model, k_inspect, cfg)
+
+
+if __name__ == "__main__":
+    main()

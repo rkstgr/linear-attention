@@ -22,7 +22,6 @@ import os
 os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 
 import dataclasses
-import importlib
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
@@ -45,11 +44,22 @@ N_KVS = [4, 32]            # below ceiling, above ceiling
 
 # Model specs: pure data so they pickle cleanly across spawn boundaries.
 MODEL_SPECS = [
-    {"label": "Linear Attention", "module": "linear_attention", "kwargs": {}},
-    {"label": "DeltaNet",         "module": "deltanet",         "kwargs": {"gated": False}},
+    {"label": "Linear Attention", "mixer": "linear_attention"},
+    {"label": "DeltaNet",         "mixer": "deltanet"},
 ]
 
-SHARED_SOURCES = ["train.py", "data.py", "utils.py"]
+SHARED_SOURCES = [
+    "train.py",
+    "data.py",
+    "utils.py",
+    "models/backbone.py",
+    "models/registry.py",
+    "models/ffn.py",
+]
+MIXER_SOURCES = {
+    "linear_attention": "models/linear_attention.py",
+    "deltanet": "models/deltanet.py",
+}
 ARCH = "dim=64,n_heads=4,n_layers=2,mlp_mult=4"
 
 
@@ -65,6 +75,7 @@ def _worker(spec):
     import optax
 
     from cache import cached
+    from models.registry import build_lm_model
     from train import train_and_eval
 
     cfg = Config(**spec["cfg_kwargs"])
@@ -72,14 +83,13 @@ def _worker(spec):
         "label": spec["label"], "n_kv": spec["n_kv"],
         "cfg": spec["cfg_kwargs"], "model": ARCH,
     }
-    sources = [f"{spec['module']}.py", *SHARED_SOURCES]
+    sources = [MIXER_SOURCES[spec["mixer"]], *SHARED_SOURCES]
     hit, save = cached(cache_key, sources, rerun=spec["rerun"])
     if hit is not None:
         return (spec["n_kv"], spec["label"], hit["best"], "cached")
 
-    Transformer = importlib.import_module(spec["module"]).Transformer
     k_model, k_train = jax.random.split(jax.random.PRNGKey(1))
-    model = Transformer(cfg.vocab_size, 64, 4, 2, 4, k_model, **spec["kwargs"])
+    model = build_lm_model(spec["mixer"], cfg.vocab_size, 64, 4, 2, 4, k_model)
     opt = optax.adamw(cfg.learning_rate)
     _, history = train_and_eval(model, cfg, k_train, opt=opt)
     best = max(h["test_acc"] for h in history)
@@ -94,7 +104,7 @@ def _make_specs(rerun: bool):
         cfg_kwargs = dataclasses.asdict(cfg)
         for m in MODEL_SPECS:
             specs.append({
-                "label": m["label"], "module": m["module"], "kwargs": m["kwargs"],
+                "label": m["label"], "mixer": m["mixer"],
                 "cfg_kwargs": cfg_kwargs, "n_kv": n_kv, "rerun": rerun,
             })
     return specs

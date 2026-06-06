@@ -49,5 +49,3 @@ parameters:
     value: 24
   patience_epochs:
     value: 8
-  diagnostics:
-    value: true

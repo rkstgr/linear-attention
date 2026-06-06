@@ -10,7 +10,15 @@ Usage:
     from cache import cached
 
     key = {"label": "DeltaNet", "cfg": dataclasses.asdict(cfg), "lr": 3e-3}
-    sources = ["deltanet.py", "train.py", "data.py", "utils.py"]
+    sources = [
+        "models/deltanet.py",
+        "models/backbone.py",
+        "models/registry.py",
+        "models/ffn.py",
+        "train.py",
+        "data.py",
+        "utils.py",
+    ]
     hit, save = cached(key, sources, rerun=args.rerun)
     if hit is not None:
         result = hit

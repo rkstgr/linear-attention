@@ -105,10 +105,11 @@ scripts/run_wandb_agent_cuda.sh <entity/project/sweep_id> --count 30
 ## Run a single model
 
 ```
-uv run python transformer.py
-uv run python linear_attention.py
-uv run python deltanet.py            # plain
-uv run python deltanet.py --gated    # gated
+uv run python -m models.transformer
+uv run python -m models.linear_attention
+uv run python -m models.deltanet            # plain
+uv run python -m models.deltanet --gated    # gated
+uv run python -m models.titans
 ```
 
 Each trains on `level1` (vocab=8192, T=64, N_KV=4 — Zoology's easiest)
@@ -118,8 +119,9 @@ and prints predictions on a held-out example.
 
 - `data.py` — MQAR generator + `level1` Config.
 - `train.py` — shared training loop.
-- `utils.py` — RMSNorm, SwiGLU, RoPE.
-- `transformer.py` / `linear_attention.py` / `deltanet.py` — one mixer each.
+- `utils.py` — RMSNorm and RoPE.
+- `models/backbone.py` / `models/registry.py` / `models/ffn.py` — shared LM scaffold.
+- `models/attention.py` / `models/linear_attention.py` / `models/deltanet.py` / `models/titans.py` — one mixer each.
 - `experiment_capacity.py` / `experiment_retention.py` — minimal sweeps.
 - `cache.py` — content-addressed cell cache.
 

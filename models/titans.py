@@ -1,18 +1,7 @@
 """Titans-style MLP memory, recurrent reference implementation.
 
-This is the "state as a model" branch of the linear-attention story. Instead
-of carrying a matrix S and reading with S @ q, each head carries the weights of
-a small MLP M_theta and updates those weights online:
-
-    m_t     = nu_t * m_{t-1} + grad_theta L_t(theta_{t-1})
-    theta_t = alpha_t * theta_{t-1} - beta_t * m_t
-    L_t     = 0.5 * ||v_t - M_theta(k_t)||^2
-
-The implementation is deliberately recurrent-per-token. Chunkwise training for
-MLP states is an approximation, so this file starts with the exact online rule.
-
 Run:
-    uv run python titans.py
+    uv run python -m models.titans
 """
 
 import argparse
@@ -26,9 +15,8 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from data import CONFIGS, mqar_example
+from data import CONFIGS
 from train import inspect_example, train_and_eval
-from utils import RMSNorm, SwiGLU, rope_freqs
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 1)
@@ -38,6 +26,7 @@ CONV_SIZE = 4
 
 def causal_dwconv(x: Array, w: Array) -> Array:
     """Depthwise causal 1D conv."""
+
     T = x.shape[0]
     K = w.shape[0]
     x_pad = jnp.pad(x, ((K - 1, 0), (0, 0)))
@@ -46,21 +35,13 @@ def causal_dwconv(x: Array, w: Array) -> Array:
 
 def silu_grad(x: Array) -> Array:
     """Derivative of SiLU(x) = x * sigmoid(x)."""
+
     s = jax.nn.sigmoid(x)
     return s + x * s * (1.0 - s)
 
 
 class Titans(eqx.Module):
-    """Titans mixer with a two-layer MLP as per-head fast memory.
-
-    Per head, the memory model is
-
-        M_theta(z) = silu(z @ W1) @ W2
-
-    with W1, W2 initialized as learned outer parameters and then updated inside
-    the forward pass. beta is the inner learning rate, nu is momentum decay, and
-    alpha is scalar retention/weight decay on the fast weights.
-    """
+    """Titans mixer with a two-layer MLP as per-head fast memory."""
 
     Wq: Array
     Wk: Array
@@ -155,8 +136,7 @@ class Titans(eqx.Module):
         k = k / (jnp.linalg.norm(k, axis=-1, keepdims=True) + 1e-6)
         return q, k, v, beta, nu, alpha
 
-    def __call__(self, x: Array, cos: Array, sin: Array) -> Array:
-        # x: (T, D)
+    def __call__(self, x: Array) -> Array:
         T, D = x.shape
         q, k, v, beta, nu, alpha = self._project(x)
 
@@ -198,8 +178,9 @@ class Titans(eqx.Module):
         out = out.transpose(1, 0, 2).reshape(T, D)
         return out @ self.Wo
 
-    def trace(self, x: Array, cos: Array, sin: Array):
+    def trace(self, x: Array):
         """Return mixer output plus per-token fast-memory diagnostics."""
+
         T, D = x.shape
         q, k, v, beta, nu, alpha = self._project(x)
 
@@ -264,134 +245,57 @@ class Titans(eqx.Module):
         return out @ self.Wo, traces
 
 
-class Block(eqx.Module):
-    norm_attn: RMSNorm
-    attn: Titans
-    norm_mlp: RMSNorm
-    mlp: SwiGLU
+def diagnostics(
+    model,
+    tokens: Array,
+    targets: Array,
+    mask: Array,
+    num_kv_pairs: int,
+    vocab_size: int,
+) -> dict[str, float]:
+    """Summarize lookup behavior and first-block fast-memory dynamics."""
 
-    def __init__(
-        self,
-        dim: int,
-        n_heads: int,
-        mlp_mult: int,
-        key,
-        memory_mult: int = 4,
-        max_inner_lr: float = 0.05,
-    ):
-        k_attn, k_mlp = jax.random.split(key)
-        self.norm_attn = RMSNorm(dim)
-        self.attn = Titans(
-            dim,
-            n_heads,
-            k_attn,
-            memory_mult=memory_mult,
-            max_inner_lr=max_inner_lr,
-        )
-        self.norm_mlp = RMSNorm(dim)
-        self.mlp = SwiGLU(dim, mlp_mult * dim, k_mlp)
+    logits = model(tokens)
+    probs = jax.nn.softmax(logits, axis=-1)
+    preds = jnp.argmax(logits, axis=-1)
+    query_mask = mask.astype(jnp.float32)
+    query_count = jnp.maximum(query_mask.sum(), 1.0)
 
-    def __call__(self, x: Array, cos: Array, sin: Array) -> Array:
-        x = x + self.attn(self.norm_attn(x), cos, sin)
-        x = x + self.mlp(self.norm_mlp(x))
-        return x
+    true_prob = jnp.take_along_axis(probs, targets[:, None], axis=-1)[:, 0]
+    prefix_values = tokens[1 : 2 * num_kv_pairs : 2]
+    prefix_value_probs = probs[:, prefix_values]
+    prefix_value_mass = prefix_value_probs.sum(axis=-1)
+    best_prefix_value = prefix_values[jnp.argmax(prefix_value_probs, axis=-1)]
 
+    def qmean(x):
+        return (x * query_mask).sum() / query_count
 
-class Transformer(eqx.Module):
-    tok_emb: Array
-    blocks: list
-    final_norm: RMSNorm
-    lm_head: Array
-    head_dim: int = eqx.field(static=True)
+    metrics = {
+        "lookup/query_acc": qmean((preds == targets).astype(jnp.float32)),
+        "lookup/query_true_prob": qmean(true_prob),
+        "lookup/query_prefix_value_mass": qmean(prefix_value_mass),
+        "lookup/query_best_prefix_value_acc": qmean(
+            (best_prefix_value == targets).astype(jnp.float32)
+        ),
+        "lookup/query_pred_is_value_half": qmean(
+            (preds >= (vocab_size // 2)).astype(jnp.float32)
+        ),
+        "lookup/query_logit_true": qmean(
+            jnp.take_along_axis(logits, targets[:, None], axis=-1)[:, 0]
+        ),
+        "lookup/query_logit_max": qmean(jnp.max(logits, axis=-1)),
+    }
 
-    def __init__(
-        self,
-        vocab_size: int,
-        dim: int,
-        n_heads: int,
-        n_layers: int,
-        mlp_mult: int,
-        key,
-        memory_mult: int = 4,
-        max_inner_lr: float = 0.05,
-    ):
-        keys = jax.random.split(key, n_layers + 2)
-        s = 1.0 / jnp.sqrt(dim)
-        self.tok_emb = jax.random.normal(keys[0], (vocab_size, dim)) * s
-        self.blocks = [
-            Block(
-                dim,
-                n_heads,
-                mlp_mult,
-                k,
-                memory_mult=memory_mult,
-                max_inner_lr=max_inner_lr,
-            )
-            for k in keys[1:-1]
-        ]
-        self.final_norm = RMSNorm(dim)
-        self.lm_head = jax.random.normal(keys[-1], (dim, vocab_size)) * s
-        self.head_dim = dim // n_heads
-
-    def __call__(self, tokens: Array) -> Array:
-        T = tokens.shape[0]
-        x = self.tok_emb[tokens]
-        cos, sin = rope_freqs(self.head_dim, T)
-        for block in self.blocks:
-            x = block(x, cos, sin)
-        x = self.final_norm(x)
-        return x @ self.lm_head
-
-    def diagnostics(
-        self,
-        tokens: Array,
-        targets: Array,
-        mask: Array,
-        num_kv_pairs: int,
-        vocab_size: int,
-    ) -> dict[str, float]:
-        """Summarize lookup behavior and first-block fast-memory dynamics."""
-        logits = self(tokens)
-        probs = jax.nn.softmax(logits, axis=-1)
-        preds = jnp.argmax(logits, axis=-1)
-        query_mask = mask.astype(jnp.float32)
-        query_count = jnp.maximum(query_mask.sum(), 1.0)
-
-        true_prob = jnp.take_along_axis(probs, targets[:, None], axis=-1)[:, 0]
-        prefix_values = tokens[1 : 2 * num_kv_pairs : 2]
-        prefix_value_probs = probs[:, prefix_values]
-        prefix_value_mass = prefix_value_probs.sum(axis=-1)
-        best_prefix_value = prefix_values[jnp.argmax(prefix_value_probs, axis=-1)]
-
-        def qmean(x):
-            return (x * query_mask).sum() / query_count
-
-        metrics = {
-            "lookup/query_acc": qmean((preds == targets).astype(jnp.float32)),
-            "lookup/query_true_prob": qmean(true_prob),
-            "lookup/query_prefix_value_mass": qmean(prefix_value_mass),
-            "lookup/query_best_prefix_value_acc": qmean(
-                (best_prefix_value == targets).astype(jnp.float32)
-            ),
-            "lookup/query_pred_is_value_half": qmean(
-                (preds >= (vocab_size // 2)).astype(jnp.float32)
-            ),
-            "lookup/query_logit_true": qmean(
-                jnp.take_along_axis(logits, targets[:, None], axis=-1)[:, 0]
-            ),
-            "lookup/query_logit_max": qmean(jnp.max(logits, axis=-1)),
-        }
-
-        x = self.tok_emb[tokens]
-        cos, sin = rope_freqs(self.head_dim, tokens.shape[0])
-        first_block = self.blocks[0]
-        _, trace = first_block.attn.trace(first_block.norm_attn(x), cos, sin)
-        metrics.update(summarize_trace(trace, query_mask, num_kv_pairs))
-        return {k: float(v) for k, v in metrics.items()}
+    x = model.tok_emb[tokens]
+    first_block = model.blocks[0]
+    _, trace = first_block.mixer.trace(first_block.norm_attn(x))
+    metrics.update(summarize_trace(trace, query_mask, num_kv_pairs))
+    return {k: float(v) for k, v in metrics.items()}
 
 
 def summarize_trace(trace: dict[str, Array], query_mask: Array, num_kv_pairs: int):
     """Aggregate first-block Titans traces by token role."""
+
     T = query_mask.shape[0]
     pos = jnp.arange(T)
     prefix_key_mask = ((pos < 2 * num_kv_pairs) & (pos % 2 == 0)).astype(jnp.float32)
@@ -465,7 +369,6 @@ def parse_args():
     parser.add_argument("--wandb-project", default="linear-attention")
     parser.add_argument("--wandb-name", default=None)
     parser.add_argument("--wandb-mode", choices=["online", "offline", "disabled"])
-    parser.add_argument("--no-wandb-diagnostics", action="store_true")
     return parser.parse_args()
 
 
@@ -498,7 +401,7 @@ def init_wandb(args, cfg):
     except ModuleNotFoundError as exc:
         raise SystemExit(
             "wandb is not installed. Run: "
-            "uv run --group experiment python titans.py --wandb"
+            "uv run --group experiment python -m models.titans --wandb"
         ) from exc
 
     config = {
@@ -518,33 +421,9 @@ def init_wandb(args, cfg):
     return wandb.init(**kwargs)
 
 
-def make_wandb_logger(run, cfg, diagnostics_enabled: bool):
-    diag_tokens, diag_targets, diag_mask = mqar_example(
-        jax.random.PRNGKey(123),
-        cfg.num_kv_pairs,
-        cfg.input_seq_len,
-        cfg.vocab_size,
-        cfg.power_a,
-    )
+def main():
+    from models.registry import build_lm_model
 
-    def log_fn(metrics, model):
-        payload = {k: v for k, v in metrics.items() if k != "kind"}
-        if diagnostics_enabled and metrics.get("kind") == "train":
-            payload.update(
-                model.diagnostics(
-                    diag_tokens,
-                    diag_targets,
-                    diag_mask,
-                    cfg.num_kv_pairs,
-                    cfg.vocab_size,
-                )
-            )
-        run.log(payload, step=metrics["global_step"])
-
-    return log_fn
-
-
-if __name__ == "__main__":
     args = parse_args()
     cfg = config_from_args(args)
     print(
@@ -554,7 +433,8 @@ if __name__ == "__main__":
     )
     k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
 
-    model = Transformer(
+    model = build_lm_model(
+        "titans",
         vocab_size=cfg.vocab_size,
         dim=64,
         n_heads=4,
@@ -568,13 +448,16 @@ if __name__ == "__main__":
     wandb_run = init_wandb(args, cfg) if args.wandb else None
     log_fn = None
     if wandb_run is not None:
-        log_fn = make_wandb_logger(
-            wandb_run,
-            cfg,
-            diagnostics_enabled=not args.no_wandb_diagnostics,
-        )
+
+        def log_fn(metrics, model):
+            payload = {k: v for k, v in metrics.items() if k != "kind"}
+            wandb_run.log(payload, step=metrics["global_step"])
 
     model, _ = train_and_eval(model, cfg, k_train, log_fn=log_fn)
     inspect_example(model, k_inspect, cfg)
     if wandb_run is not None:
         wandb_run.finish()
+
+
+if __name__ == "__main__":
+    main()
