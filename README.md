@@ -28,7 +28,8 @@ Use the CUDA group only on Linux x86_64 NVIDIA GPU machines.
 uv run python -m unittest discover -v
 ```
 
-Current tests cover model parity and the local executor.
+Current tests cover model parity, the local executor, the task registry and
+MQAR generation, and the early-stopping policy.
 
 ## Core Experiments
 
@@ -91,16 +92,19 @@ Existing plots are under `figures/`.
 
 ## Layout
 
-- `models/` - shared LM scaffold, registries, FFN, and mixers.
-- `data.py` - MQAR generator and current MQAR configs.
-- `train.py` - shared MQAR training loop.
-- `executor.py` - local content-addressed step executor.
-- `experiments/defaults.py` - default executor training recipe and partial
-  config dataclasses.
+- `linattn/` - the source package:
+  - `models/` - shared LM scaffold, mixer/FFN factory, and mixers.
+  - `config.py` - central RunConfig shape (model + task + train + seed).
+  - `tasks/` - the Task abstraction, registry, and MQAR task.
+  - `train.py` - `fit` and its seams (train_step, EarlyStopping, Reporter, ...).
+  - `runner.py` - executor glue (default_train + train_run).
+  - `executor.py` - local content-addressed step executor.
+  - `cache.py` - legacy result cache (retention only).
+- `experiments/mqar.py` - MQAR presets/level1 experiment config for the CLIs.
 - `experiments/capacity.py` - executor-backed capacity toy experiment.
 - `experiments/retention.py` - legacy-cache retention toy experiment.
 - `sweeps/` - W&B sweep configs and docs.
-- `tests/` - parity and executor tests.
+- `tests/` - parity, executor, task, and training-policy tests.
 - `AGENTS.md` - operating guide and active queue.
 - `docs/experiments/` - result ledger.
 

@@ -1,6 +1,5 @@
-"""Toy datasets for sub-quadratic sequence models.
+"""MQAR (Multi-Query Associative Recall) task — Arora et al., "Zoology" (2023).
 
-MQAR (Multi-Query Associative Recall) — Arora et al., "Zoology" (2023).
 The benchmark that empirically distinguishes softmax from linear attention.
 
 Format (matches Zoology's `multiquery_ar.py`):
@@ -31,8 +30,7 @@ import os as _os
 # kernel launch overhead on MPS (and small-matmul overhead on CUDA), so CPU
 # is fastest for the small models in this repo. Set `JAX_PLATFORMS=cuda,cpu`
 # explicitly when you actually want GPU (e.g. for the large softmax baseline).
-# Must run before any jax import anywhere; data.py is the first import in
-# every entrypoint, so the env var lands in time.
+# Must run before any jax import.
 _os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 from dataclasses import dataclass
@@ -40,94 +38,20 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 
+from linattn.tasks.base import Split, register_task
+
 
 @dataclass(frozen=True)
-class Config:
-    """A complete MQAR experiment configuration: data + training."""
+class MQARConfig:
+    """MQAR data spec. `name` discriminates the task in the registry."""
+
     vocab_size: int
     input_seq_len: int
     num_kv_pairs: int
     power_a: float
     n_train: int
     n_test: int
-    batch_size: int
-    eval_batch_size: int
-    max_epochs: int
-    learning_rate: float
-    target_acc: float
-    patience_epochs: int
-
-
-# toy — first proof test for new recurrent mechanisms.
-#
-# With one association there is no key disambiguation yet. Passing this says
-# the model can carry a prefix value to a query position at all; failing this
-# points at write/read plumbing or inner-update stability.
-toy = Config(
-    vocab_size=64,
-    input_seq_len=16,
-    num_kv_pairs=1,
-    power_a=0.01,
-    n_train=5_000,
-    n_test=256,
-    batch_size=64,
-    eval_batch_size=64,
-    max_epochs=16,
-    learning_rate=1e-3,
-    target_acc=0.99,
-    patience_epochs=5,
-)
-
-
-# easy — debug curriculum for new recurrent mechanisms.
-#
-# This is intentionally easier than Zoology level1: small vocab, short context,
-# and only two associations. It still requires content-based lookup, but the
-# model gets a low-entropy first rung before level1's 4096-way value choice.
-easy = Config(
-    vocab_size=128,
-    input_seq_len=32,
-    num_kv_pairs=2,
-    power_a=0.01,
-    n_train=20_000,
-    n_test=512,
-    batch_size=64,
-    eval_batch_size=64,
-    max_epochs=16,
-    learning_rate=1e-3,
-    target_acc=0.99,
-    patience_epochs=5,
-)
-
-
-# level1 — Zoology's easiest training config from `original_mqar_configs.py`
-# (vocab=8192, seq=64, N_KV=4, power-law gaps). Numbers from this run are
-# directly comparable to published Zoology curves.
-#
-# Training params follow Zoology defaults except batch_size, which we shrink
-# from 256 to 64 so a CPU run fits in memory; with early stopping the easy
-# task usually solves in 1–3 epochs anyway.
-level1 = Config(
-    vocab_size=8192,
-    input_seq_len=64,
-    num_kv_pairs=4,
-    power_a=0.01,
-    n_train=100_000,
-    n_test=1_000,
-    batch_size=64,
-    eval_batch_size=64,
-    max_epochs=32,
-    learning_rate=1e-3,
-    target_acc=0.99,
-    patience_epochs=5,
-)
-
-
-CONFIGS = {
-    "toy": toy,
-    "easy": easy,
-    "level1": level1,
-}
+    name: str = "mqar"
 
 
 def mqar_example(
@@ -207,7 +131,7 @@ def mqar_batch(
     )
 
 
-def make_split(key, n: int, cfg: Config):
+def make_split(key, n: int, cfg: MQARConfig) -> Split:
     """Pre-generate n MQAR examples per cfg. Returns arrays of shape (n, T).
 
     Zoology pre-builds and caches train/test splits so every epoch sees the
@@ -217,3 +141,70 @@ def make_split(key, n: int, cfg: Config):
     return jax.vmap(mqar_example, in_axes=(0, None, None, None, None))(
         keys, cfg.num_kv_pairs, cfg.input_seq_len, cfg.vocab_size, cfg.power_a,
     )
+
+
+@register_task("mqar")
+class MQARTask:
+    """Live MQAR task built from an MQARConfig."""
+
+    sources: tuple[str, ...] = ("linattn/tasks/mqar.py",)
+
+    def __init__(self, cfg: MQARConfig):
+        self.cfg = cfg
+        self.vocab_size = cfg.vocab_size
+        self.n_train = cfg.n_train
+        self.n_test = cfg.n_test
+
+    def make_split(self, key, n: int) -> Split:
+        return make_split(key, n, self.cfg)
+
+    def describe(self, model, key) -> None:
+        """Print kv pairs, query positions, and predicted vs true values."""
+        cfg = self.cfg
+        tokens, targets, mask = mqar_example(
+            key, cfg.num_kv_pairs, cfg.input_seq_len, cfg.vocab_size, cfg.power_a
+        )
+        preds = jnp.argmax(model(tokens), axis=-1)
+        q_idx = jnp.nonzero(mask, size=cfg.num_kv_pairs)[0]
+        print(f"\n  kv pairs : {tokens[: 2 * cfg.num_kv_pairs].tolist()}")
+        print(f"  q pos    : {q_idx.tolist()}")
+        print(f"  queries  : {tokens[q_idx].tolist()}")
+        print(f"  expected : {targets[q_idx].tolist()}")
+        print(f"  predicted: {preds[q_idx].tolist()}")
+
+
+# Debug/smoke-scale presets. level1 is a full experiment, not a preset — it
+# lives as a complete RunConfig in the experiments layer.
+
+# toy — first proof test for new recurrent mechanisms.
+#
+# With one association there is no key disambiguation yet. Passing this says
+# the model can carry a prefix value to a query position at all; failing this
+# points at write/read plumbing or inner-update stability.
+toy = MQARConfig(
+    vocab_size=64,
+    input_seq_len=16,
+    num_kv_pairs=1,
+    power_a=0.01,
+    n_train=5_000,
+    n_test=256,
+)
+
+# easy — debug curriculum for new recurrent mechanisms.
+#
+# Intentionally easier than Zoology level1: small vocab, short context, and
+# only two associations. It still requires content-based lookup, but the model
+# gets a low-entropy first rung before level1's 4096-way value choice.
+easy = MQARConfig(
+    vocab_size=128,
+    input_seq_len=32,
+    num_kv_pairs=2,
+    power_a=0.01,
+    n_train=20_000,
+    n_test=512,
+)
+
+PRESETS = {
+    "toy": toy,
+    "easy": easy,
+}

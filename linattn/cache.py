@@ -7,17 +7,17 @@ cell is recomputed.
 
 Usage:
 
-    from cache import cached
+    from linattn.cache import cached
 
     key = {"label": "DeltaNet", "cfg": dataclasses.asdict(cfg), "lr": 3e-3}
     sources = [
-        "models/deltanet.py",
-        "models/backbone.py",
-        "models/registry.py",
-        "models/ffn.py",
-        "train.py",
-        "data.py",
-        "utils.py",
+        "linattn/models/deltanet.py",
+        "linattn/models/backbone.py",
+        "linattn/models/factory.py",
+        "linattn/models/ffn.py",
+        "linattn/train.py",
+        "linattn/tasks/mqar.py",
+        "linattn/utils.py",
     ]
     hit, save = cached(key, sources, rerun=args.rerun)
     if hit is not None:

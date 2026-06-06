@@ -11,7 +11,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from models.registry import build_lm_model
+from linattn.models.factory import build_lm_model
 
 FIXTURE = {
     "vocab_size": 17,

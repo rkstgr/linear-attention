@@ -26,10 +26,11 @@ Foundation means:
 - cleanup or deletion of legacy paths.
 
 Done: scaffold/registries, executor, capacity executor port, parity tests,
-executor tests.
+executor tests, `linattn/` source package, task abstraction + registry,
+central config module, `fit` decomposition (train_step / EarlyStopping /
+Reporter / TrainResult), entrypoint migration, README polish.
 
-Not done: task abstraction, central config module, README/setup polish, retention
-executor port, CI, and legacy `cache.py` decision.
+Not done: retention executor port, CI, and legacy `cache.py` decision.
 
 ## Research Context
 
@@ -61,17 +62,16 @@ For experiments:
 
 - record config, seeds, git commit, W&B links, metric, null/baseline, and regime;
 - select on validation, report final numbers on held-out test;
-- keep toy-scale results labeled toy-scale;
-- every new task must overfit one batch before sweeps.
+- keep toy-scale results labeled toy-scale.
 
 ## Active Queue
 
-1. Task/config foundation.
-2. README/setup/test cleanup.
-3. Retention executor port and `cache.py` decision.
-4. CI for parity and executor tests.
-5. Record existing Titans W&B sweeps and historical toy results.
-6. Comparable W&B sweeps for non-Titans architectures.
+1. Retention executor port and `cache.py` decision.
+2. CI for parity, executor, task, and training tests.
+3. Record existing Titans W&B sweeps and historical toy results.
+4. Comparable W&B sweeps for non-Titans architectures.
+
+Done: task/config foundation (proposal 0003), README/setup/test cleanup.
 
 Keep one goal per PR. Use `pr/<short-goal>` for foundation work and
 `pr/<number>-<short-goal>` when a numbered proposal exists.

@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from models.registry import build_lm_model
+from linattn.models.factory import build_lm_model
 
 
 def main():

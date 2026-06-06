@@ -7,8 +7,8 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from models.ffn import SwiGLU
-from utils import RMSNorm
+from linattn.models.ffn import SwiGLU
+from linattn.utils import RMSNorm
 
 MixerFactory = Callable[[int, int, Array], eqx.Module]
 FFNFactory = Callable[[int, int, Array], eqx.Module]
