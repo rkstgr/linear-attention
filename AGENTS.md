@@ -61,8 +61,7 @@ For experiments:
 
 - record config, seeds, git commit, W&B links, metric, null/baseline, and regime;
 - select on validation, report final numbers on held-out test;
-- keep toy-scale results labeled toy-scale;
-- every new task must overfit one batch before sweeps.
+- keep toy-scale results labeled toy-scale.
 
 ## Active Queue
 
