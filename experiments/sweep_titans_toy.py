@@ -1,7 +1,7 @@
 """W&B sweep entrypoint for the Titans MQAR curriculum.
 
 Run one sampled config:
-    uv run --group experiment python sweep_titans_toy.py
+    uv run --group experiment python -m experiments.sweep_titans_toy
 
 Create and launch the sweep:
     uv run --group experiment wandb sweep sweeps/titans_toy.yaml
@@ -143,7 +143,7 @@ def main():
     except ModuleNotFoundError as exc:
         raise SystemExit(
             "wandb is not installed. Run with: "
-            "uv run --group experiment python sweep_titans_toy.py"
+            "uv run --group experiment python -m experiments.sweep_titans_toy"
         ) from exc
 
     run = wandb.init()

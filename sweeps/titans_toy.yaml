@@ -1,4 +1,4 @@
-program: sweep_titans_toy.py
+program: experiments.sweep_titans_toy
 project: linear-attention
 name: titans-toy
 method: bayes
@@ -13,6 +13,7 @@ command:
   - run
   - --no-sync
   - python
+  - -m
   - ${program}
 parameters:
   max_inner_lr:

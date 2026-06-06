@@ -1,23 +1,17 @@
 """DeltaNet and Gated DeltaNet mixers.
 
-Run:
-    uv run python -m models.deltanet            # plain DeltaNet
-    uv run python -m models.deltanet --gated    # Gated DeltaNet
+Run MQAR smoke experiments via `uv run python -m experiments.run_model deltanet`
+or `uv run python -m experiments.run_model gated_deltanet`.
 """
 
 import os
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 
-import sys
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax import Array
-
-from data import level1
-from train import inspect_example, train_and_eval
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 1)
@@ -120,30 +114,3 @@ class DeltaNet(eqx.Module):
         out = jax.vmap(per_head)(q, k, v, beta, alpha)
         out = out.transpose(1, 0, 2).reshape(T, D)
         return out @ self.Wo
-
-
-def main():
-    from models.registry import build_lm_model
-
-    gated = "--gated" in sys.argv
-    name = "Gated DeltaNet" if gated else "DeltaNet"
-    mixer = "gated_deltanet" if gated else "deltanet"
-    cfg = level1
-    print(f"--- MQAR ({name}, vocab={cfg.vocab_size}) ---")
-    k_model, k_train, k_inspect = jax.random.split(jax.random.PRNGKey(1), 3)
-
-    model = build_lm_model(
-        mixer,
-        vocab_size=cfg.vocab_size,
-        dim=64,
-        n_heads=4,
-        n_layers=2,
-        mlp_mult=4,
-        key=k_model,
-    )
-    model, _ = train_and_eval(model, cfg, k_train)
-    inspect_example(model, k_inspect, cfg)
-
-
-if __name__ == "__main__":
-    main()

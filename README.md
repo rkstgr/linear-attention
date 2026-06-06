@@ -9,14 +9,16 @@ the only line that changes is `self.attn = ...`.
 Each isolates one axis. ~5 min each on CPU.
 
 ```
-uv run python experiment_capacity.py
-uv run python experiment_retention.py
+uv run python -m experiments.capacity
+uv run python -m experiments.retention
 ```
 
-Cells are cached by (config + source-file bytes) under `.experiment_cache/`.
-Edit one model file → only its cells recompute. `--rerun` forces, `--parallel N`
-dispatches N cells across worker processes. Pair with two terminals
-(`OMP_NUM_THREADS=2 ... --parallel 4` each) for 8-way concurrency.
+`experiments.capacity` runs through the local executor: each cell gets a
+content-addressed output directory under `.experiment_cache/steps/`, with
+`metrics.json`, `status.json`, `_SUCCESS`, and a run manifest under
+`.experiment_cache/runs/`. Edit one model file → only its cells recompute.
+`--rerun` forces, `--parallel N` dispatches independent cells across spawned
+worker processes.
 
 ### Capacity ceiling — LinAttn vs DeltaNet
 
@@ -105,11 +107,11 @@ scripts/run_wandb_agent_cuda.sh <entity/project/sweep_id> --count 30
 ## Run a single model
 
 ```
-uv run python -m models.transformer
-uv run python -m models.linear_attention
-uv run python -m models.deltanet            # plain
-uv run python -m models.deltanet --gated    # gated
-uv run python -m models.titans
+uv run python -m experiments.run_model transformer
+uv run python -m experiments.run_model linear_attention
+uv run python -m experiments.run_model deltanet
+uv run python -m experiments.run_model gated_deltanet
+uv run python -m experiments.titans
 ```
 
 Each trains on `level1` (vocab=8192, T=64, N_KV=4 — Zoology's easiest)
@@ -122,8 +124,11 @@ and prints predictions on a held-out example.
 - `utils.py` — RMSNorm and RoPE.
 - `models/backbone.py` / `models/registry.py` / `models/ffn.py` — shared LM scaffold.
 - `models/attention.py` / `models/linear_attention.py` / `models/deltanet.py` / `models/titans.py` — one mixer each.
-- `experiment_capacity.py` / `experiment_retention.py` — minimal sweeps.
-- `cache.py` — content-addressed cell cache.
+- `experiments/capacity.py` / `experiments/retention.py` — minimal sweeps.
+- `experiments/run_model.py` / `experiments/titans.py` — single-model MQAR runs.
+- `experiments/sweep_titans_toy.py` — W&B Titans sweep entrypoint.
+- `executor.py` — content-addressed experiment steps, output directories, and run manifests.
+- `cache.py` — legacy value cache still used by unported scripts.
 
 ## Shape conventions
 
