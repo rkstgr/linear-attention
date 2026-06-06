@@ -5,13 +5,15 @@ the **front-matter** (what we intend to do and claim); recorded results live in
 [`../experiments/`](../experiments/) (what happened).
 
 Each proposal implements one phase of `DESIGN.md`, so numbers track phase order.
+The live, prioritized queue — numbers, dependencies, OPEN-decision routing, and
+status — is in [`ROADMAP.md`](ROADMAP.md).
 
 ## Naming
 
 ```text
 0000-process.md
-0001-golden-tests-and-scaffold-extraction.md
-0002-architecture-registry.md
+0001-golden-scaffold.md
+0002-executor.md
 ```
 
 ## Lifecycle
