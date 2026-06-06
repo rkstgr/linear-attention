@@ -1,6 +1,12 @@
 # Proposal 0003: task abstraction, central config, and `fit` decomposition
 
-Status: proposed. Branch: `claude/refactoring-state-C3UO3`.
+Status: implemented on branch `claude/refactoring-state-C3UO3`.
+
+Deviation from the sketch: there is no separate `JsonReporter`. `runner.train_run`
+writes `metrics.json` directly from the returned `TrainResult` (which already
+carries history + stop_info + run config), so the artifact is still the cached
+source of truth and `WandbReporter` still only fires on a fresh run (cache hits
+skip `fit` entirely). A streaming `JsonReporter` can be added later if needed.
 
 ## Goal
 
