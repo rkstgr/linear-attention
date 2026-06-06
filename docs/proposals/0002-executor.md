@@ -2,7 +2,8 @@
 
 > Resolves the executor-approach open decision in
 > [DIRECTION.md](../../DIRECTION.md). This is the Sprinter design draft for the
-> light executor that later supports the `Task` interface and config split.
+> light executor that runs experiment steps after the `Task` interface and config
+> split have their own minimal shape.
 
 Path: **Full**, because this shapes experiment provenance and cache validity
 even though it should not authorize a new scientific claim.
@@ -15,8 +16,8 @@ Skeptic pass is required before this becomes a settlement.
 ## Goal
 
 Define the smallest self-built executor that replaces per-script cache plumbing
-with content-addressed `Step` execution, provenance, and config-shaped experiment
-launches, without importing redun or Marin.
+with content-addressed `ExecutorStep` execution, provenance, and config-shaped
+experiment launches, without importing redun or Marin.
 
 ## Non-goals
 
@@ -29,7 +30,9 @@ launches, without importing redun or Marin.
 - No selective config versioning in the first implementation. Hash the full
   normalized config until that becomes painful.
 - No implementation of the `Task` protocol itself. The executor must accept the
-  future config shape, but 0003 owns `Task`.
+  split config shape, but task semantics live outside the executor.
+- No separate `steps/` package. Follow Marin's convention: reusable experiment
+  recipes live in `experiments/defaults.py`.
 
 ## Sources reviewed
 
@@ -74,7 +77,8 @@ and recursive graph reduction.
 
 ### Read of Marin
 
-Marin's useful idea is a filesystem-first experiment step:
+Marin's useful idea is a filesystem-first experiment step plus default recipe
+builders:
 
 - `ExecutorStep` has a name, function, dataclass config, and optional
   dependencies.
@@ -85,17 +89,20 @@ Marin's useful idea is a filesystem-first experiment step:
 - Each step writes machine-readable info/status next to its output.
 - A runner executes steps in topological order and skips already-successful
   outputs.
+- Experiment scripts usually call default helpers such as `default_train(...)`
+  rather than writing the training recipe inline.
 - The production source includes a lot we do not want yet: distributed leases,
   heartbeats, GCS region inference, mirroring, Fray/Iris resources, pseudo-deps,
   and remote environments.
 
-Borrow: named `Step`, dataclass configs, dependency-aware digest, deterministic
-output directory, status/metadata files, topological local execution, and a
-small `run_experiment(...)` entrypoint.
+Borrow: named `ExecutorStep`, dataclass configs, dependency-aware digest,
+deterministic output directory, status/metadata files, topological local execution,
+`this_output_path()` / `output_path_of(...)` placeholders, a small
+`executor_main(...)` entrypoint, and `experiments/defaults.py` as the home for
+standard recipes like `default_train(...)`.
 
-Skip: `InputName`/`OutputName` placeholders at first, selective
-`VersionedValue`, pseudo-dependencies, distributed locks, remote resources,
-mirroring, regional placement, and broad pipeline materialization.
+Skip: selective `VersionedValue`, pseudo-dependencies, distributed locks, remote
+resources, mirroring, regional placement, and broad pipeline materialization.
 
 ### Our current pain
 
@@ -111,7 +118,7 @@ The executor should solve those and little else.
 
 ### Proposed API
 
-Add `executor.py` with three small concepts:
+Add `executor.py` with four small concepts:
 
 ```python
 @dataclass(frozen=True)
@@ -121,42 +128,49 @@ class SourceSet:
 
 
 @dataclass(frozen=True)
-class Step:
+class ExecutorStep:
     name: str
-    fn: Callable[[Any, "RunContext"], Any]
+    fn: Callable[[Any], None]
     config: Any
     sources: tuple[SourceSet | str, ...] = ()
-    deps: tuple["Step", ...] = ()
+    deps: tuple["ExecutorStep", ...] = ()
     version: str = "1"
     description: str | None = None
 
 
 @dataclass(frozen=True)
-class RunContext:
-    output_dir: Path
-    digest: str
-    git_commit: str | None
-    rerun: bool
+class OutputPath:
+    step: ExecutorStep | None
+    name: str | None = None
+
+
+def this_output_path() -> OutputPath:
+    return OutputPath(step=None)
+
+
+def output_path_of(step: ExecutorStep, name: str | None = None) -> OutputPath:
+    return OutputPath(step=step, name=name)
 ```
 
-`run_experiment(name, steps, *, parallel=1, rerun=False, cache_dir=None)`:
+`executor_main(steps, *, prefix=".experiment_cache", parallel=1, rerun=False)`:
 
 1. Normalizes each dataclass/dict/list config into stable JSON.
-2. Expands source sets and automatically includes the file defining `fn`.
+2. Replaces `this_output_path()` with the current step output directory and
+   `output_path_of(step)` with the dependency's output directory.
 3. Hashes `schema_version`, `step.name`, `step.version`, normalized config,
    dependency digests, and source file bytes.
 4. Creates `.experiment_cache/steps/<step-name>-<digest>/`.
-5. If `result.pkl` plus `status.json` says success and `rerun=False`, returns a
+5. If `_SUCCESS` plus `status.json` says success and `rerun=False`, returns a
    cache hit.
-6. Otherwise calls `fn(config, context)`, writes `result.pkl`, `metadata.json`,
-   and `status.json`.
+6. Otherwise calls `fn(resolved_config)`. The step function owns writing its
+   artifacts under the resolved output path.
 7. Writes `.experiment_cache/runs/<experiment-name>-<timestamp>-<digest>.json`
    with git commit, argv, cwd, full step metadata, source digests, and hit/fresh
    status.
 
-This is deliberately closer to Marin's `StepSpec` than to redun's task
+This is deliberately closer to Marin's `ExecutorStep` than to redun's task
 decorator. A researcher should be able to understand a launch by reading one
-experiment file plus `executor.py`.
+experiment file, `experiments/defaults.py`, and `executor.py`.
 
 ### Source sets
 
@@ -166,8 +180,9 @@ Centralize the source lists that are currently duplicated:
 CORE_SOURCES = SourceSet(
     "core",
     (
-        "train.py",
-        "data.py",
+        "configs.py",
+        "experiments/defaults.py",
+        "tasks/registry.py",
         "utils.py",
         "models/backbone.py",
         "models/registry.py",
@@ -184,27 +199,108 @@ MIXER_SOURCES = {
 }
 ```
 
-Later 0003 can replace `data.py` in `CORE_SOURCES` with task-specific source
-sets from the `Task` registry. That is the bridge: `Task` owns data semantics;
-the executor owns cache/provenance mechanics.
+Task-specific files are not part of `CORE_SOURCES`; they come from
+`task_sources(run.task)`. That is the bridge: tasks own data semantics; the
+executor owns cache/provenance mechanics.
 
-### Config shape for 0003
+### Default train recipe
 
-The executor should be config-agnostic but friendly to the planned split:
+Training should be exposed to experiments as a default step builder, not as an
+inline loop in every experiment. Add `experiments/defaults.py`:
 
 ```python
+@dataclass(frozen=True)
+class ModelConfig:
+    mixer: str
+    vocab_size: int
+    dim: int
+    n_heads: int
+    n_layers: int
+    mlp_mult: int
+    mixer_kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TrainConfig:
+    batch_size: int
+    eval_batch_size: int
+    max_epochs: int
+    learning_rate: float
+    target_metric: str
+    target_value: float
+    patience_epochs: int
+
+
 @dataclass(frozen=True)
 class RunConfig:
     model: ModelConfig
     task: TaskConfig
     train: TrainConfig
     seed: int
+
+
+@dataclass(frozen=True)
+class TrainRunConfig:
+    run: RunConfig
+    output_path: str
+
+
+def default_train(name: str, run: RunConfig) -> ExecutorStep:
+    return ExecutorStep(
+        name=f"checkpoints/{name}",
+        fn=train_run,
+        config=TrainRunConfig(run=run, output_path=this_output_path()),
+        sources=(CORE_SOURCES, task_sources(run.task), mixer_sources(run.model)),
+    )
 ```
 
-The first executor implementation can still port `experiment_capacity.py` before
-0003 by hashing today's `data.Config` plus a small model dict. After 0003 lands,
-the same `Step` simply receives `RunConfig`. No executor API should mention
-MQAR, model registries, W&B, or tasks directly.
+`train_run(...)` is the shared training recipe: build the task from
+`run.task`, build the model from `run.model`, run the optimization loop, evaluate
+the task metric, and write `metrics.json` / optional artifacts into
+`output_path`. There is no public `train_and_eval(...)` requirement in this
+proposal; helper functions can stay private inside `experiments/defaults.py`
+until reuse pressure appears.
+
+The executor remains config-agnostic. It does not know MQAR, addition, model
+registries, W&B, or training semantics. It only resolves output paths, hashes
+steps, runs functions, and records provenance.
+
+An experiment that trains Titans on addition should look like:
+
+```python
+from executor import executor_main
+from experiments.defaults import default_train
+from configs import ModelConfig, RunConfig, TrainConfig
+from tasks.addition import AdditionConfig
+
+task = AdditionConfig(n_digits=2, n_numbers=2, train_size=50_000, test_size=2_000)
+model = ModelConfig(
+    mixer="titans",
+    vocab_size=task.vocab_size,
+    dim=64,
+    n_heads=4,
+    n_layers=2,
+    mlp_mult=4,
+    mixer_kwargs={"memory_mult": 2, "max_inner_lr": 0.0125},
+)
+train = TrainConfig(
+    batch_size=64,
+    eval_batch_size=128,
+    max_epochs=32,
+    learning_rate=3e-4,
+    target_metric="exact_match",
+    target_value=0.99,
+    patience_epochs=5,
+)
+
+step = default_train(
+    "addition/titans/2digit-2number",
+    RunConfig(model=model, task=task, train=train, seed=1),
+)
+
+if __name__ == "__main__":
+    executor_main([step])
+```
 
 ### First port
 
@@ -219,12 +315,13 @@ Before:
 
 After:
 
-- `experiment_capacity.py` declares four `Step`s, one per cell.
-- Each `Step.config` names the mixer, architecture, data config, learning rate,
-  seed, and cell label.
-- Each `Step.sources` is `(CORE_SOURCES, MIXER_SOURCES[mixer])`.
-- `run_experiment("capacity", steps, parallel=args.parallel, rerun=args.rerun)`
-  handles cache, process pool, manifest, and summary statuses.
+- `experiment_capacity.py` declares four `ExecutorStep`s, one per cell.
+- Each `ExecutorStep.config` names the mixer, architecture, data config,
+  learning rate, seed, and cell label.
+- Each `ExecutorStep.sources` is `(CORE_SOURCES, task_sources(task),
+  mixer_sources(model))`.
+- `executor_main(steps, parallel=args.parallel, rerun=args.rerun)` handles cache,
+  process pool, manifest, and summary statuses.
 - The step function stays top-level and picklable so JAX still runs in spawned
   worker processes.
 
@@ -239,9 +336,11 @@ Use a local-only status file, not a distributed lease:
 .experiment_cache/
   steps/
     capacity-linear_attention-nkv4-<digest>/
-      result.pkl
+      metrics.json
+      artifacts/
       metadata.json
       status.json
+      _SUCCESS
       lock
   runs/
     capacity-20260606T120000-<digest>.json
@@ -280,8 +379,9 @@ for shared foundation-model pipelines: path placeholders, remote resources,
 region pinning, status leases, and cloud mirroring. Copying that code would make
 the first task/config split harder to inspect.
 
-The light layer should be roughly "current `cache.py` plus named steps,
-centralized source sets, topological execution, and manifests."
+The light layer should be roughly "current `cache.py` plus named steps, output
+directories, centralized source sets, topological execution, default recipe
+builders, and manifests."
 
 ## Skeptic review
 
@@ -295,10 +395,11 @@ The review should especially attack:
   that is acceptable at this scale;
 - whether process-pool execution can preserve current JAX behavior and stdout
   ergonomics;
-- whether `result.pkl` is too opaque for long-lived provenance;
+- whether filesystem artifacts (`metrics.json`, optional `artifacts/`) are
+  enough and avoid opaque long-lived `result.pkl` records;
 - whether local locks are sufficient if two scripts share a cell;
-- whether this should wait until 0003 lands, or whether the executor design
-  should constrain 0003 first.
+- whether the executor implementation should wait until the task/config split has
+  landed, while this proposal only settles the executor shape.
 
 ## Final settlement
 
@@ -306,8 +407,9 @@ Pending Skeptic review.
 
 Sprinter's proposed settlement is: implement a local, self-built executor by
 growing `cache.py` into `executor.py`; borrow Marin's named-step/output-dir
-shape and redun's source-sensitive task identity; skip both projects'
-general-purpose workflow machinery; port only `experiment_capacity.py` first.
+shape, `experiments/defaults.py` recipe builders, and redun's source-sensitive
+task identity; skip both projects' general-purpose workflow machinery; port only
+the capacity experiment first.
 
 ## Budget
 
@@ -320,7 +422,9 @@ configs; no new mechanism result is authorized.
 ## Files expected to change
 
 - `executor.py` or a grown `cache.py`
-- `experiment_capacity.py`
+- `experiments/defaults.py`
+- `configs.py` if the split config classes do not already exist
+- `experiments/capacity.py` or `experiment_capacity.py`
 - `tests/test_executor.py`
 - `README.md` if launch commands or cache docs change
 
@@ -330,15 +434,18 @@ Optional only if the implementation makes it obvious:
 
 ## Validation
 
-- Unit: identical `Step` config/source/deps produces the same digest.
+- Unit: identical `ExecutorStep` config/source/deps produces the same digest.
 - Unit: changing one config field changes the digest.
 - Unit: changing one source byte changes the digest.
 - Unit: dependency digest changes flow into downstream step digest.
 - Unit: no-op rerun is a cache hit and does not call the step function.
 - Unit: `rerun=True` recomputes and overwrites the result.
 - Unit: duplicate identical steps in one experiment execute once.
-- Smoke: `uv run python experiment_capacity.py --parallel 1` still prints the
-  same four capacity cells and summary shape.
+- Unit: `this_output_path()` resolves to the current step output directory.
+- Unit: `output_path_of(upstream)` resolves to the upstream step output
+  directory and makes the downstream digest depend on the upstream digest.
+- Smoke: the capacity entrypoint still prints the same four capacity cells and
+  summary shape.
 - Smoke: a second no-op run reports cache hits.
 - Manual: inspect the run manifest and confirm it includes git commit, argv,
   normalized config, source digests, step status, and hit/fresh state.
@@ -349,10 +456,10 @@ Infrastructure only.
 
 For a fixed step function, source set, dependency graph, config, seed, and git
 checkout, the executor derives a stable content address and reuses the cached
-result. Changing any hashed config value, dependency digest, or source file byte
-causes a cache miss. Porting the capacity experiment through the executor does
-not change its cell configs, seeds, model construction, training call, or summary
-format.
+step output. Changing any hashed config value, dependency digest, or source file
+byte causes a cache miss. Porting the capacity experiment through the executor
+does not change its cell configs, seeds, model construction, training recipe, or
+summary format.
 
 No accuracy, capacity, retention, scaling, or task-generalization claim is made.
 There is no metric/null/regime because this proposal does not measure model
@@ -360,13 +467,15 @@ behavior.
 
 ## Follow-ups
 
-- 0003 should introduce `Task`, `ModelConfig`, `TaskConfig`, `TrainConfig`, and
-  `RunConfig` without depending on a more complex executor.
+- The task/config split should introduce `Task`, `ModelConfig`, `TaskConfig`,
+  `TrainConfig`, and `RunConfig` without depending on the executor
+  implementation.
 - Later port `experiment_retention.py` only after the capacity port validates the
   API.
 - Add W&B sweep integration later, after task/config split makes `arch x task`
   cells concrete.
 - Consider selective versioning only if full-config hashing causes real noisy
   recomputation.
-- Consider file/path outputs only when a multi-step data pipeline exists. Until
-  then, a result object plus optional `RunContext.output_dir` artifacts is enough.
+- Consider richer file/path outputs only when a multi-step data pipeline exists.
+  Until then, each train step writes `metrics.json` plus optional artifacts under
+  its output directory.
