@@ -168,6 +168,10 @@ experiments/
 - **Depends on** — 0002 (executor) + 0004 (tasks; runs per `arch × task`).
 - **Key files** — `sweep.py` (from `sweep_titans_toy.py`); per-mixer FLOP
   functions; `sweeps/*.yaml` gain `arch`/`task` keys; Titans diagnostics hook.
+- **Diagnostics decision** — deferred from 0001: decide whether architecture-
+  specific observability is exposed as callbacks/hooks or explicit per-sweep
+  helper calls. Keep diagnostics out of sweep objectives unless promoted by a
+  proposal.
 - **Validation / exit** — one sweep per `(arch × task tier)` at **matched
   budget**; the Titans cells reproduce W&B history (metric regression).
 - **Resolves OPEN** — iso-width vs iso-param (lean: fix `(dim, depth)`, report
