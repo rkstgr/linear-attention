@@ -1,48 +1,57 @@
 # Roadmap
 
-The ordered proposal backlog that implements [`DESIGN.md`](../../DESIGN.md).
-`DESIGN.md` owns **what / why**; [`../process/METHOD.md`](../process/METHOD.md)
-owns **how** (the Sprinter/Auditor workflow). This file is the bridge: it turns
-the staged plan into a numbered queue of proposals.
+The proposal **backlog** — a candidate queue, not a fixed plan.
+[`DIRECTION.md`](../../DIRECTION.md) owns the living **what / why** (questions and
+bets); [`../process/METHOD.md`](../process/METHOD.md) owns **how** (the
+Sprinter/Skeptic workflow). This file turns the current direction into the next
+few proposals — and is **re-derived every time an experiment lands**.
 
-**One proposal = one DESIGN phase = one goal = one PR.** If a proposal wants an
+**Horizon.** Only the 🔜 item is committed. Everything ⬜ is a *candidate*: real
+enough to plan against, loose enough that a result can reorder, drop, or insert
+ahead of it. Don't read the table as a march from 0001 to 0007 — read it as
+"what looks worth doing next, given what we know today".
+
+**One proposal = one open question = one goal = one PR.** If a proposal wants an
 "and", it is two proposals. When we start one, we draft
 `docs/proposals/000N-<goal>.md` from
 [`../process/PROPOSAL_TEMPLATE.md`](../process/PROPOSAL_TEMPLATE.md) (Sprinter →
-Auditor → settle), implement it on `pr/000N-<short-goal>`, and record the outcome
-in [`../experiments/`](../experiments/) against the pre-registered claim.
+Skeptic → settle), implement it on `pr/000N-<short-goal>`, and record the outcome
+in [`../experiments/`](../experiments/) against the pre-registered claim — which
+then updates `DIRECTION.md` and this backlog.
 
-Status: 🔜 next · ⬜ planned · ✅ done
+Status: 🔜 committed (next) · ⬜ candidate · ✅ done
 
-## Priority change vs the first DESIGN draft
+## Why this ordering
 
-The original draft deferred the **executor** to the last phase and tried to do
-several things per phase. Two corrections shape this queue:
+Two standing rationales shape the current backlog:
 
-1. **Executor moves up to Phase 1** (proposal 0002), right after the scaffold and
-   *before* tasks and sweeps — it is the experiment-side of the same
-   modularization, so the task/config/sweep work plugs into one backbone instead
-   of bespoke scripts. The kernel already exists (`cache.py` + the hand-rolled DAG
-   in `experiment_capacity.py`), so it lands cheaply and behavior-preserving.
-2. **One goal per proposal.** The draft's "task abstraction + addition" splits
-   into 0003 (abstraction, MQAR unchanged) and 0004 (the new addition task), so
-   each PR proves one thing.
+1. **Executor early** (proposal 0002), right after the scaffold and *before*
+   tasks and sweeps — it is the experiment-side of the same modularization, so
+   task/config/sweep work plugs into one backbone instead of bespoke scripts. The
+   kernel already exists (`cache.py` + the hand-rolled DAG in
+   `experiment_capacity.py`). *Caveat (Sprinter):* adopt the heavier executor
+   only when `cache.py` actually hurts — let felt pain pull it in, don't run it
+   on schedule.
+2. **One goal per proposal.** "Task abstraction + addition" splits into 0003
+   (abstraction, MQAR unchanged) and 0004 (the new addition task), so each PR
+   proves one thing.
 
-The order is otherwise **dependency-locked**, not a free ranking: everything
-needs the scaffold; tasks precede sweeps (sweeps run per `arch × task`); scaling
-needs the sweep harness; MoE is deferred.
+The order is **dependency-constrained**, not a fixed ranking: everything needs
+the scaffold; tasks precede sweeps (sweeps run per `arch × task`); scaling needs
+the sweep harness; MoE is deferred. Within those constraints, the ledger decides
+what is next.
 
 ## The queue
 
-| # | Phase · goal | Depends on | Resolves OPEN | Compute | Status |
+| # | Goal | Depends on | Resolves OPEN | Compute | Status |
 |---|---|---|---|---|---|
-| [0001](#0001--golden-gate--scaffold-extraction) | P0 · golden-gated scaffold + registries | — | — | ~0 | 🔜 |
-| [0002](#0002--executor-on-redun) | P1 · executor on redun | 0001 | executor → redun | ~0 | ⬜ |
-| [0003](#0003--task-interface--config-split) | P2 · `Task` protocol + `Config` split (MQAR unchanged) | 0002 | — | ~0 | ⬜ |
-| [0004](#0004--addition-task) | P3 · addition task + exact-match | 0003 | PE (infra only) | low | ⬜ |
-| [0005](#0005--comparable-per-arch-hp-search) | P4 · comparable per-arch sweep | 0002, 0004 | iso-width/param · objective | **high** | ⬜ |
-| [0006](#0006--scaling-frontier--pe-knob) | P5 · scaling frontier + PE knob | 0005 | PE (knob + claim) | **high** | ⬜ |
-| [0007](#0007--moe--isoflop-later) | P6 · MoE arch + IsoFLOP port | 0001, 0005 | — | high | ⬜ |
+| [0001](#0001--golden-gate--scaffold-extraction) | golden-gated scaffold + registries | — | — | ~0 | 🔜 |
+| [0002](#0002--executor-on-redun) | executor on redun | 0001 | executor → redun | ~0 | ⬜ |
+| [0003](#0003--task-interface--config-split) | `Task` protocol + `Config` split (MQAR unchanged) | 0002 | — | ~0 | ⬜ |
+| [0004](#0004--addition-task) | addition task + exact-match | 0003 | PE (infra only) | low | ⬜ |
+| [0005](#0005--comparable-per-arch-hp-search) | comparable per-arch sweep | 0002, 0004 | iso-width/param · objective | **high** | ⬜ |
+| [0006](#0006--scaling-frontier--pe-knob) | scaling frontier + PE knob | 0005 | PE (knob + claim) | **high** | ⬜ |
+| [0007](#0007--moe--isoflop-later) | MoE arch + IsoFLOP port | 0001, 0005 | — | high | ⬜ |
 
 ```
 0001 ─► 0002 ─► 0003 ─► 0004 ─► 0005 ─► 0006
@@ -61,7 +70,7 @@ archs) are fixed in each proposal — compute is the scarce resource, not LOC.
 - **Goal** — extract the duplicated `Block` + LM wrapper into one shared scaffold
   plus mixer/FFN registries; each arch file becomes *only its mixer*.
   Behavior-preserving.
-- **DESIGN** — Phase 0; §3, §4.1, §4.2, §8.
+- **Direction** — infra for the whole comparison; no question yet (the golden equality *is* the claim).
 - **Depends on** — nothing (foundation).
 - **Key files** — new `models/scaffold.py`, `models/registry.py`, `models/ffn.py`;
   mixer-only `models/{attention,linear_attention,deltanet,titans}.py`; a golden
@@ -101,7 +110,7 @@ experiments/
 
 - **Goal** — grow `cache.py` into a redun-backed `Step`/`Experiment` layer and
   re-express `experiment_capacity.py` through it. Behavior-preserving.
-- **DESIGN** — Phase 1; §3 ("config is data"), §7.
+- **Direction** — infra; forces the *executor* open decision (see [`DIRECTION.md`](../../DIRECTION.md) → Open decisions).
 - **Depends on** — 0001 (registry → a config can name an arch/FFN).
 - **Key files** — `executor.py` (or grown `cache.py`); `experiments/capacity.py`
   (port); `pyproject.toml` (+`redun`, pinned, in the experiment group).
@@ -109,9 +118,10 @@ experiments/
   cached numbers via the executor; a no-op rerun is a cache **hit**, and changing
   one source byte is a cache **miss** (content-addressing shown, not assumed);
   provenance (call-graph) is queryable.
-- **Resolves OPEN** — executor approach → **redun** (DESIGN §7).
+- **Resolves OPEN** — executor approach → **redun** (see [`DIRECTION.md`](../../DIRECTION.md)
+  → Open decisions); adopt when `cache.py` hurts, not on schedule.
 - **Claim** — infra only (reproduces existing capacity numbers).
-- **Auditor guardrail** — pin the redun version; record git hash + redun version
+- **Skeptic guardrail** — pin the redun version; record git hash + redun version
   in run provenance.
 
 ## 0003 — task interface + Config split
@@ -119,7 +129,7 @@ experiments/
 - **Goal** — introduce the `Task` protocol and split `Config` into
   `ModelConfig` / `TaskConfig` / `TrainConfig`; wrap MQAR with **zero** behavior
   change; runs become `(model, task, train)` configs on the executor.
-- **DESIGN** — Phase 2; §3, §4.3, §4.4.
+- **Direction** — infra; the task abstraction that lets one arch face many tasks.
 - **Depends on** — 0002 (the executor dispatches the 3-way config).
 - **Key files** — `tasks/base.py`, `tasks/registry.py`, `tasks/mqar.py` (wraps
   today's `data.py`), config dataclasses, task-driven `train.py`.
@@ -132,10 +142,10 @@ experiments/
 
 - **Goal** — add `tasks/addition.py`: tokenizer, target/mask alignment, train +
   eval-grid split, per-example exact-match — on the **existing Equinox models**.
-- **DESIGN** — Phase 3; §5 (esp. §5.2 alignment care-point), §4.3.
+- **Direction** — opens the **external-validity** question: does a real task (addition) behave, and would the synthetic ranking predict it? (in-distribution only here).
 - **Depends on** — 0003 (`Task` interface + `Config` split).
 - **Key files** — `tasks/addition.py`; register in `tasks/registry.py`; a smoke
-  test that is also the §5.2 alignment check.
+  test that is also the alignment check (target/mask shifted exactly right).
 - **Validation / exit** — smoke green (target/mask shift exactly right; finite
   loss; right shapes); addition trains on the softmax model and ≥1 recurrent
   model.
@@ -144,7 +154,7 @@ experiments/
   only.** The `(n_digits, n_numbers)` eval grid is plumbing here and is marked
   *exploratory*; no cross-cell / length-generalization claim is made.
 - **PE decision (settled)** — length-generalization is confounded by positional
-  encoding (§5.3), so the PE knob **and** any length-gen claim land together in
+  encoding, so the PE knob **and** any length-gen claim land together in
   **0006**, not here. Lock the in-distribution eval set + seed before training;
   do not read OOD cells as a result.
 
@@ -154,7 +164,7 @@ experiments/
   fixed size per tier, a steps/FLOPs-to-target objective, arch-aware FLOPs, a
   working hyperband band, equal trial budget per arch, and an optional per-arch
   diagnostics hook. Reproduce the Titans numbers.
-- **DESIGN** — Phase 4; §6.
+- **Direction** — the **capacity / retention** bets, now at *matched budget* across archs.
 - **Depends on** — 0002 (executor) + 0004 (tasks; runs per `arch × task`).
 - **Key files** — `sweep.py` (from `sweep_titans_toy.py`); per-mixer FLOP
   functions; `sweeps/*.yaml` gain `arch`/`task` keys; Titans diagnostics hook.
@@ -174,7 +184,7 @@ experiments/
 - **Goal** — sweep model sizes for accuracy-vs-params/FLOPs per arch; make PE a
   `ModelConfig` knob; finalize the **PE-controlled** generalization heatmap for
   addition.
-- **DESIGN** — Phase 5; §5.3, §6 (Phase B).
+- **Direction** — the **survives-scale** question + the PE / length-gen confound.
 - **Depends on** — 0005.
 - **Resolves OPEN** — PE knob (and unlocks the deferred 0004 length-gen claim).
 - **Claim (pre-registered)** — scaling behavior per mechanism (acc-vs-params/
@@ -184,7 +194,7 @@ experiments/
 
 - **Goal** — MoE as `FFNS["moe"]` (needs `jax.lax.ragged_dot`); port the IsoFLOP /
   Chinchilla harness onto the generic Task + arch registry.
-- **DESIGN** — Phase 6; §10.
+- **Direction** — extension: a new mechanism family (MoE) through the same registry.
 - **Depends on** — 0001 (FFN registry) + 0005 (sweep harness).
 - **Claim** — set at the gate.
 
@@ -192,14 +202,18 @@ experiments/
 
 ## Open-decision routing
 
-| OPEN decision | DESIGN § | Locked in | Current lean |
-|---|---|---|---|
-| Executor approach | §7 | 0002 | **redun** (decided) |
-| PE knob / length-gen | §5.3, §11 | 0004 (infra) → 0006 (knob + claim) | in-dist claim now; PE + gen in 0006 (decided) |
-| Iso-width vs iso-param | §6, §11 | 0005 | fix `(dim, depth)`, report Δ |
-| Sweep objective + censoring | §6, §11 | 0005 | steps/FLOPs-to-target |
+The decisions themselves (and current leans) live in
+[`DIRECTION.md`](../../DIRECTION.md); this table is just which proposal is
+expected to force each one:
+
+| OPEN decision | Decided in |
+|---|---|
+| Executor approach | 0002 — but only when `cache.py` hurts |
+| PE knob / length-gen | 0004 (in-dist claim) → 0006 (knob + length-gen claim) |
+| Iso-width vs iso-param | 0005 |
+| Sweep objective + censoring | 0005 |
 
 ## Next action
 
 Draft **0001 — golden gate + scaffold extraction** from the template
-(Sprinter → Auditor → settle), then implement on `pr/0001-golden-scaffold`.
+(Sprinter → Skeptic → settle), then implement on `pr/0001-golden-scaffold`.
