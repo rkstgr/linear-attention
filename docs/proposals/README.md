@@ -1,35 +1,25 @@
 # Proposals
 
-Settled Sprinter/Skeptic proposals — one goal each, one PR each. Proposals are
-the **front-matter** (what we intend to do and claim); recorded results live in
-[`../experiments/`](../experiments/) (what happened).
+Proposals are for research-affecting work, not every edit. See `../../AGENTS.md`
+for the current process.
 
-Each proposal answers one open question in [`DIRECTION.md`](../../DIRECTION.md);
-numbers are monotonic ids, **not** a phase order. The live backlog — numbers,
-dependencies, OPEN-decision routing, and status — is in
-[`ROADMAP.md`](ROADMAP.md).
+Use a proposal when a change can affect a claim, metric, task, benchmark,
+training protocol, evaluation protocol, W&B sweep, or compute budget. Otherwise
+use the default path in `AGENTS.md`.
 
 ## Naming
 
 ```text
-0000-process.md
-0001-scaffold.md
-0002-executor.md
+NNNN-short-goal.md
 ```
+
+Numbers are historical IDs, not execution order.
 
 ## Lifecycle
 
-1. Draft from a single goal (usually "answer the next open question in
-   `DIRECTION.md`").
-2. Add the Sprinter proposal.
-3. Add the Skeptic review (>= 1 concrete objection, or why none).
-4. Settle: fold in the minimal guardrails.
-5. Implement in one PR.
-6. Record the result in [`../experiments/`](../experiments/) against the
-   pre-registered claim.
+1. Write the smallest proposal that fixes the goal, claim, budget, and guardrails.
+2. Implement one goal on one branch.
+3. Record experimental results in `docs/experiments/` when a claim is tested.
+4. Update `AGENTS.md` when the active queue or repo direction changes.
 
-## Scope rule
-
-One goal per proposal. If it wants to solve two independent problems, split it.
-Mechanical changes can use the Lite path in
-[`../process/PROPOSAL_TEMPLATE.md`](../process/PROPOSAL_TEMPLATE.md).
+Historical proposals may be more verbose than the current standard.

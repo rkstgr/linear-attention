@@ -1,7 +1,7 @@
 # Proposal 0001: parity-gated scaffold extraction
 
-> Foundational infra — does **not** answer a [DIRECTION.md](../../DIRECTION.md)
-> question directly. The **parity equality** (params + forward outputs identical
+> Foundational infra — does **not** answer a research question directly. The
+> **parity equality** (params + forward outputs identical
 > before/after) is the claim.
 
 Path: **Full** (Sprinter → Skeptic → settle), even though the change is

@@ -1,112 +1,63 @@
-# Code scratchpad
+# linear-attention
 
-Minimal implementations of softmax / linear attention / DeltaNet / Gated
-DeltaNet on MQAR for the linear-attention post. One file per architecture;
-the only line that changes is `self.attn = ...`.
+Small research workbench for comparing sequence-mixing mechanisms:
 
-## Two minimal experiments
+- softmax attention;
+- linear attention;
+- DeltaNet and gated DeltaNet;
+- Titans.
 
-Each isolates one axis. ~5 min each on CPU.
+The compact operating guide and active queue are in `AGENTS.md`.
 
+Current mode: foundation cleanup before comparable W&B sweeps for the
+non-Titans architectures.
+
+## Setup
+
+```sh
+uv sync
+uv sync --group experiment
+uv sync --group cuda --group experiment
 ```
+
+Use the CUDA group only on Linux x86_64 NVIDIA GPU machines.
+
+## Tests
+
+```sh
+uv run python -m unittest discover -v
+```
+
+Current tests cover model parity and the local executor.
+
+## Core Experiments
+
+```sh
 uv run python -m experiments.capacity
 uv run python -m experiments.retention
 ```
 
-`experiments.capacity` runs through the local executor: each cell gets a
-content-addressed output directory under `.experiment_cache/steps/`, with
-`metrics.json`, `status.json`, `_SUCCESS`, and a run manifest under
-`.experiment_cache/runs/`. Edit one model file → only its cells recompute.
-`--rerun` forces, `--parallel N` dispatches independent cells across spawned
-worker processes.
+`experiments.capacity` uses the local executor in `executor.py`.
+`experiments.retention` still uses the legacy `cache.py` path and is scheduled
+for cleanup.
 
-### Capacity ceiling — LinAttn vs DeltaNet
+Executor outputs live under:
 
-LA's additive `S += v k^T` saturates at `N_KV ~ d_k`. DN's delta rule
-overwrites in the key direction and degrades past the ceiling rather than
-collapsing.
-
-vocab=256, T=128, dim=64, head_dim=16, lr=3e-3, n_train=20k. `N_KV ∈ {4, 32}`
-brackets the ceiling.
-
-| N_KV | model            | best_acc |
-| ---: | ---------------- | -------: |
-|    4 | Linear Attention |    0.966 |
-|    4 | DeltaNet         |    0.994 |
-|   32 | Linear Attention |    0.049 |
-|   32 | DeltaNet         |    0.771 |
-
-Below the ceiling: both solve. At 2×: LA collapses to ~1/N_KV (random
-pick from the value set), DN holds at 0.77 — the JL soft-cap past `d_k`,
-not a hard cliff.
-
-### Streaming noise — DeltaNet vs Gated DeltaNet
-
-Every non-write token still writes a rank-1 perturbation through `W_k`.
-At fixed N_KV, this noise accumulates with T. Gating's `α < 1` decays it;
-plain DN can't.
-
-vocab=1024, N_KV=4 (well below the ceiling), dim=64, lr=3e-3, n_train=20k.
-`T ∈ {64, 512}`. Gate parameterised Mamba2-style:
-`α = exp(-softplus(dt_logit) · σ(x·W_α + b_α))` with `dt_logit` init −10
-so α ≈ 1 at step 0 and stays in (0, 1].
-
-|    T | model            | best_acc |
-| ---: | ---------------- | -------: |
-|   64 | DeltaNet         |    0.985 |
-|   64 | Gated DeltaNet   |    0.984 |
-|  512 | DeltaNet         |    0.909 |
-|  512 | Gated DeltaNet   |    0.939 |
-
-T=64: tied — no streaming noise to decay. T=512: GDN +0.03. The bounded
-init keeps the gap small — `softplus` saturates at very negative input,
-so `dt_logit` moves off −10 slowly. Less aggressive init (e.g. −3) would
-trade `α ≈ 1` fidelity for faster activation.
-
-### Scaling — parallel vs recurrent vs chunkwise
-
-Three single-head impls of `S_t = S_{t-1} + k_t v_t^T` (no delta, no gating):
-parallel `(Q K^T ⊙ M) V`, per-token `lax.scan`, and chunkwise (scan over
-chunks of size C, parallel form within). fp32, head_dim=16, batch=1.
-
-```
-uv run python bench_chunkwise.py --device {cpu,mps,cuda}
-uv run python bench_chunkwise.py --device {cpu,mps,cuda} --c-sweep
-uv run python bench_chunkwise_plot.py
+```text
+.experiment_cache/steps/
+.experiment_cache/runs/
 ```
 
-**MacBook Pro M5** (10-core, 16 GB)
+Useful flags:
 
-![M5 scaling](figures/bench_chunkwise.png)
-
-![M5 C sweet spot](figures/bench_chunkwise_C_sweep.png)
-
-**A100** (40 GB, single GPU)
-
-![A100 scaling](figures/a100/bench_chunkwise.png)
-
-![A100 C sweet spot](figures/a100/bench_chunkwise_C_sweep.png)
-
-
-## Setup
-
-```
-uv sync                              # CPU only
-uv sync --group experiment           # + W&B sweep tooling
-uv sync --group cuda --group experiment  # + NVIDIA GPU on Linux x86_64
+```sh
+uv run python -m experiments.capacity --rerun
+uv run python -m experiments.capacity --parallel 4
 ```
 
-For W&B sweeps, create the sweep from any machine and run agents with:
+## Run One Model
 
-```
-uv run --group experiment wandb sweep sweeps/titans_level1.yaml
-scripts/run_wandb_agent_cpu.sh <entity/project/sweep_id> --count 30
-scripts/run_wandb_agent_cuda.sh <entity/project/sweep_id> --count 30
-```
-
-## Run a single model
-
-```
+```sh
 uv run python -m experiments.run_model transformer
 uv run python -m experiments.run_model linear_attention
 uv run python -m experiments.run_model deltanet
@@ -114,35 +65,47 @@ uv run python -m experiments.run_model gated_deltanet
 uv run python -m experiments.titans
 ```
 
-Each trains on `level1` (vocab=8192, T=64, N_KV=4 — Zoology's easiest)
-and prints predictions on a held-out example.
+## W&B Sweeps
+
+Recent context: Titans toy/easy/level1 sweeps exist in W&B. The next research
+push is to run comparable sweeps for the other architectures after config/task
+and provenance cleanup.
+
+```sh
+uv run --group experiment wandb sweep sweeps/titans_level1.yaml
+scripts/run_wandb_agent_cpu.sh <entity/project/sweep_id> --count 30
+scripts/run_wandb_agent_cuda.sh <entity/project/sweep_id> --count 30
+```
+
+See `sweeps/README.md` for metric groups and launch details.
+
+## Benchmarks
+
+```sh
+uv run python bench_chunkwise.py --device cpu
+uv run python bench_chunkwise.py --device cpu --c-sweep
+uv run python bench_chunkwise_plot.py
+```
+
+Existing plots are under `figures/`.
 
 ## Layout
 
-- `data.py` — MQAR generator + `level1` Config.
-- `train.py` — shared training loop.
-- `utils.py` — RMSNorm and RoPE.
-- `models/backbone.py` / `models/registry.py` / `models/ffn.py` — shared LM scaffold.
-- `models/attention.py` / `models/linear_attention.py` / `models/deltanet.py` / `models/titans.py` — one mixer each.
-- `experiments/capacity.py` / `experiments/retention.py` — minimal sweeps.
-- `experiments/run_model.py` / `experiments/titans.py` — single-model MQAR runs.
-- `experiments/sweep_titans_toy.py` — W&B Titans sweep entrypoint.
-- `executor.py` — content-addressed experiment steps, output directories, and run manifests.
-- `cache.py` — legacy value cache still used by unported scripts.
-
-## Shape conventions
-
-```
-T  = sequence length
-D  = model dim
-H  = number of heads
-Dh = head dim  (= D / H)
-V  = vocab size
-B  = batch size
-```
+- `models/` - shared LM scaffold, registries, FFN, and mixers.
+- `data.py` - MQAR generator and current MQAR configs.
+- `train.py` - shared MQAR training loop.
+- `executor.py` - local content-addressed step executor.
+- `experiments/defaults.py` - default executor training recipe and partial
+  config dataclasses.
+- `experiments/capacity.py` - executor-backed capacity toy experiment.
+- `experiments/retention.py` - legacy-cache retention toy experiment.
+- `sweeps/` - W&B sweep configs and docs.
+- `tests/` - parity and executor tests.
+- `AGENTS.md` - operating guide and active queue.
+- `docs/experiments/` - result ledger.
 
 ## Sources
 
 - [HazyResearch/zoology](https://github.com/HazyResearch/zoology)
-- [Zoology paper (arXiv 2312.04927)](https://arxiv.org/html/2312.04927v1)
-- [Zoology blogpost — Measuring and Improving Recall](https://hazyresearch.stanford.edu/blog/2023-12-11-zoology1-analysis)
+- [Zoology paper](https://arxiv.org/html/2312.04927v1)
+- [Zoology blogpost](https://hazyresearch.stanford.edu/blog/2023-12-11-zoology1-analysis)
