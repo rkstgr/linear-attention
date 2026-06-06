@@ -1,12 +1,13 @@
 # Proposals
 
-Settled Sprinter/Auditor proposals — one goal each, one PR each. Proposals are
+Settled Sprinter/Skeptic proposals — one goal each, one PR each. Proposals are
 the **front-matter** (what we intend to do and claim); recorded results live in
 [`../experiments/`](../experiments/) (what happened).
 
-Each proposal implements one phase of `DESIGN.md`, so numbers track phase order.
-The live, prioritized queue — numbers, dependencies, OPEN-decision routing, and
-status — is in [`ROADMAP.md`](ROADMAP.md).
+Each proposal answers one open question in [`DIRECTION.md`](../../DIRECTION.md);
+numbers are monotonic ids, **not** a phase order. The live backlog — numbers,
+dependencies, OPEN-decision routing, and status — is in
+[`ROADMAP.md`](ROADMAP.md).
 
 ## Naming
 
@@ -18,9 +19,10 @@ status — is in [`ROADMAP.md`](ROADMAP.md).
 
 ## Lifecycle
 
-1. Draft from a single goal (usually "Phase N of DESIGN.md").
+1. Draft from a single goal (usually "answer the next open question in
+   `DIRECTION.md`").
 2. Add the Sprinter proposal.
-3. Add the Auditor review (>= 1 concrete objection, or why none).
+3. Add the Skeptic review (>= 1 concrete objection, or why none).
 4. Settle: fold in the minimal guardrails.
 5. Implement in one PR.
 6. Record the result in [`../experiments/`](../experiments/) against the
