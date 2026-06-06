@@ -10,31 +10,31 @@ from typing import Any
 import jax
 import optax
 
-from data import Config
-from executor import ExecutorStep, SourceSet, this_output_path
-from models.registry import build_lm_model
-from train import train_and_eval
+from linattn.data import Config
+from linattn.executor import ExecutorStep, SourceSet, this_output_path
+from linattn.models.factory import build_lm_model
+from linattn.train import train_and_eval
 
 
 CORE_SOURCES = SourceSet(
     "core",
     (
         "experiments/defaults.py",
-        "train.py",
-        "data.py",
-        "utils.py",
-        "models/backbone.py",
-        "models/registry.py",
-        "models/ffn.py",
+        "linattn/train.py",
+        "linattn/data.py",
+        "linattn/utils.py",
+        "linattn/models/backbone.py",
+        "linattn/models/factory.py",
+        "linattn/models/ffn.py",
     ),
 )
 
 MIXER_SOURCES = {
-    "transformer": SourceSet("mixer:transformer", ("models/attention.py",)),
-    "linear_attention": SourceSet("mixer:linear_attention", ("models/linear_attention.py",)),
-    "deltanet": SourceSet("mixer:deltanet", ("models/deltanet.py",)),
-    "gated_deltanet": SourceSet("mixer:gated_deltanet", ("models/deltanet.py",)),
-    "titans": SourceSet("mixer:titans", ("models/titans.py",)),
+    "transformer": SourceSet("mixer:transformer", ("linattn/models/attention.py",)),
+    "linear_attention": SourceSet("mixer:linear_attention", ("linattn/models/linear_attention.py",)),
+    "deltanet": SourceSet("mixer:deltanet", ("linattn/models/deltanet.py",)),
+    "gated_deltanet": SourceSet("mixer:gated_deltanet", ("linattn/models/deltanet.py",)),
+    "titans": SourceSet("mixer:titans", ("linattn/models/titans.py",)),
 }
 
 
@@ -84,7 +84,7 @@ class TrainRunConfig:
 
 
 def mqar_sources() -> SourceSet:
-    return SourceSet("task:mqar", ("data.py",))
+    return SourceSet("task:mqar", ("linattn/data.py",))
 
 
 def mixer_sources(model: ModelConfig) -> SourceSet:

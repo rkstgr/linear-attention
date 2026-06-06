@@ -4,7 +4,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from executor import (
+from linattn.executor import (
     ExecutorStep,
     SourceSet,
     executor_main,

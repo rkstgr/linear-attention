@@ -2,12 +2,12 @@
 
 from functools import partial
 
-from models.attention import Attention
-from models.backbone import LMModel
-from models.deltanet import DeltaNet
-from models.ffn import SwiGLU
-from models.linear_attention import LinearAttention
-from models.titans import Titans
+from linattn.models.attention import Attention
+from linattn.models.backbone import LMModel
+from linattn.models.deltanet import DeltaNet
+from linattn.models.ffn import SwiGLU
+from linattn.models.linear_attention import LinearAttention
+from linattn.models.titans import Titans
 
 MIXERS = {
     "transformer": Attention,

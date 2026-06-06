@@ -14,9 +14,9 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 
 import jax
 
-from data import CONFIGS
-from models.registry import MIXERS, build_lm_model
-from train import inspect_example, train_and_eval
+from linattn.data import CONFIGS
+from linattn.models.factory import MIXERS, build_lm_model
+from linattn.train import inspect_example, train_and_eval
 
 DISPLAY_NAMES = {
     "transformer": "Transformer",

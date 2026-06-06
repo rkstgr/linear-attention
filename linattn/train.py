@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from data import Config, make_split, mqar_example
+from linattn.data import Config, make_split, mqar_example
 
 
 def tree_l2_norm(tree):

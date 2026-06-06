@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from utils import apply_rope, rope_freqs
+from linattn.utils import apply_rope, rope_freqs
 
 
 class Attention(eqx.Module):

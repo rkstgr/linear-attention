@@ -28,7 +28,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 
-from data import Config, level1
+from linattn.data import Config, level1
 
 
 # vocab > T at the largest T (assertion in data.py). 1024 > 512.
@@ -50,16 +50,16 @@ MODEL_SPECS = [
 ]
 
 SHARED_SOURCES = [
-    "train.py",
-    "data.py",
-    "utils.py",
-    "models/backbone.py",
-    "models/registry.py",
-    "models/ffn.py",
+    "linattn/train.py",
+    "linattn/data.py",
+    "linattn/utils.py",
+    "linattn/models/backbone.py",
+    "linattn/models/factory.py",
+    "linattn/models/ffn.py",
 ]
 MIXER_SOURCES = {
-    "deltanet": "models/deltanet.py",
-    "gated_deltanet": "models/deltanet.py",
+    "deltanet": "linattn/models/deltanet.py",
+    "gated_deltanet": "linattn/models/deltanet.py",
 }
 ARCH = "dim=64,n_heads=4,n_layers=2,mlp_mult=4"
 
@@ -72,9 +72,9 @@ def _worker(spec):
     import jax
     import optax
 
-    from cache import cached
-    from models.registry import build_lm_model
-    from train import train_and_eval
+    from linattn.cache import cached
+    from linattn.models.factory import build_lm_model
+    from linattn.train import train_and_eval
 
     cfg = Config(**spec["cfg_kwargs"])
     cache_key = {

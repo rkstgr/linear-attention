@@ -27,8 +27,8 @@ import dataclasses
 import json
 from pathlib import Path
 
-from data import level1
-from executor import executor_main
+from linattn.data import level1
+from linattn.executor import executor_main
 from experiments.defaults import (
     ModelConfig,
     RunConfig,

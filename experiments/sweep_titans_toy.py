@@ -18,9 +18,9 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 import jax
 import equinox as eqx
 
-from data import CONFIGS
-from models.registry import build_lm_model
-from train import train_and_eval
+from linattn.data import CONFIGS
+from linattn.models.factory import build_lm_model
+from linattn.train import train_and_eval
 
 CONV_SIZE = 4
 TRAIN_FLOP_MULTIPLIER = 3.0
