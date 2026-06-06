@@ -16,7 +16,7 @@ Usage:
         "linattn/models/factory.py",
         "linattn/models/ffn.py",
         "linattn/train.py",
-        "linattn/data.py",
+        "linattn/tasks/mqar.py",
         "linattn/utils.py",
     ]
     hit, save = cached(key, sources, rerun=args.rerun)
