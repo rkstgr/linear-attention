@@ -152,7 +152,7 @@ path.
 Git is the boundary between ideas.
 
 - One branch / PR per settled proposal; branch names track proposal numbers
-  (`pr/0001-golden-tests`).
+  (`pr/0001-scaffold`).
 - W&B runs and cached results record the git commit hash.
 - Use a worktree only when there is real parallelism (multiple agents or PRs at
   once), not for every edit.

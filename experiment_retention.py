@@ -24,7 +24,6 @@ import os
 os.environ.setdefault("JAX_PLATFORMS", "cpu")  # must run before `import jax`
 
 import dataclasses
-import importlib
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
@@ -46,11 +45,22 @@ CFG = dataclasses.replace(
 TS = [64, 512]             # short → noise negligible; long → noise dominates
 
 MODEL_SPECS = [
-    {"label": "DeltaNet",       "module": "deltanet", "kwargs": {"gated": False}},
-    {"label": "Gated DeltaNet", "module": "deltanet", "kwargs": {"gated": True}},
+    {"label": "DeltaNet",       "mixer": "deltanet"},
+    {"label": "Gated DeltaNet", "mixer": "gated_deltanet"},
 ]
 
-SHARED_SOURCES = ["train.py", "data.py", "utils.py"]
+SHARED_SOURCES = [
+    "train.py",
+    "data.py",
+    "utils.py",
+    "models/backbone.py",
+    "models/registry.py",
+    "models/ffn.py",
+]
+MIXER_SOURCES = {
+    "deltanet": "models/deltanet.py",
+    "gated_deltanet": "models/deltanet.py",
+}
 ARCH = "dim=64,n_heads=4,n_layers=2,mlp_mult=4"
 
 
@@ -63,6 +73,7 @@ def _worker(spec):
     import optax
 
     from cache import cached
+    from models.registry import build_lm_model
     from train import train_and_eval
 
     cfg = Config(**spec["cfg_kwargs"])
@@ -70,14 +81,13 @@ def _worker(spec):
         "label": spec["label"], "T": spec["T"],
         "cfg": spec["cfg_kwargs"], "model": ARCH,
     }
-    sources = [f"{spec['module']}.py", *SHARED_SOURCES]
+    sources = [MIXER_SOURCES[spec["mixer"]], *SHARED_SOURCES]
     hit, save = cached(cache_key, sources, rerun=spec["rerun"])
     if hit is not None:
         return (spec["T"], spec["label"], hit["best"], "cached")
 
-    Transformer = importlib.import_module(spec["module"]).Transformer
     k_model, k_train = jax.random.split(jax.random.PRNGKey(1))
-    model = Transformer(cfg.vocab_size, 64, 4, 2, 4, k_model, **spec["kwargs"])
+    model = build_lm_model(spec["mixer"], cfg.vocab_size, 64, 4, 2, 4, k_model)
     opt = optax.adamw(cfg.learning_rate)
     _, history = train_and_eval(model, cfg, k_train, opt=opt)
     best = max(h["test_acc"] for h in history)
@@ -92,7 +102,7 @@ def _make_specs(rerun: bool):
         cfg_kwargs = dataclasses.asdict(cfg)
         for m in MODEL_SPECS:
             specs.append({
-                "label": m["label"], "module": m["module"], "kwargs": m["kwargs"],
+                "label": m["label"], "mixer": m["mixer"],
                 "cfg_kwargs": cfg_kwargs, "T": T, "rerun": rerun,
             })
     return specs

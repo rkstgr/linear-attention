@@ -13,7 +13,7 @@ dependencies, OPEN-decision routing, and status — is in
 
 ```text
 0000-process.md
-0001-golden-scaffold.md
+0001-scaffold.md
 0002-executor.md
 ```
 

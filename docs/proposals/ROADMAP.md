@@ -45,7 +45,7 @@ what is next.
 
 | # | Goal | Depends on | Resolves OPEN | Compute | Status |
 |---|---|---|---|---|---|
-| [0001](#0001--golden-gate--scaffold-extraction) | golden-gated scaffold + registries | — | — | ~0 | 🔜 |
+| [0001](#0001--parity-gated-scaffold-extraction) | parity-gated scaffold + registries | — | — | ~0 | 🔜 |
 | [0002](#0002--executor-on-redun) | executor on redun | 0001 | executor → redun | ~0 | ⬜ |
 | [0003](#0003--task-interface--config-split) | `Task` protocol + `Config` split (MQAR unchanged) | 0002 | — | ~0 | ⬜ |
 | [0004](#0004--addition-task) | addition task + exact-match | 0003 | PE (infra only) | low | ⬜ |
@@ -65,22 +65,22 @@ archs) are fixed in each proposal — compute is the scarce resource, not LOC.
 
 ---
 
-## 0001 — golden gate + scaffold extraction
+## 0001 — parity-gated scaffold extraction
 
-- **Goal** — extract the duplicated `Block` + LM wrapper into one shared scaffold
+- **Goal** — extract the duplicated `Block` + LM wrapper into one shared backbone
   plus mixer/FFN registries; each arch file becomes *only its mixer*.
   Behavior-preserving.
-- **Direction** — infra for the whole comparison; no question yet (the golden equality *is* the claim).
+- **Direction** — infra for the whole comparison; no question yet (the parity equality *is* the claim).
 - **Depends on** — nothing (foundation).
-- **Key files** — new `models/scaffold.py`, `models/registry.py`, `models/ffn.py`;
-  mixer-only `models/{attention,linear_attention,deltanet,titans}.py`; a golden
+- **Key files** — new `models/backbone.py`, `models/registry.py`, `models/ffn.py`;
+  mixer-only `models/{attention,linear_attention,deltanet,titans}.py`; a parity
   test; delete the four copy-pasted scaffolds. Also: rename `Transformer →
   LMModel`; drop the dead `cos`/`sin` plumbing (PE becomes an explicit per-mixer
   choice).
 - Suggestion:
 ```
 models/
-  common.py
+  backbone.py
   transformer.py
   linear_attention.py
   deltanet.py
@@ -102,7 +102,7 @@ experiments/
 - **Validation / exit** — current architectures should be recreated (param count +
   fixed-seed forward per arch, against current code), then refactor under it;
   assert identical for all four archs.
-- **Claim** — infra only; the golden equality *is* the claim (no new measurement).
+- **Claim** — infra only; the parity equality *is* the claim (no new measurement).
 - **Why first** — lowest-risk, highest-leverage: a safety net then pure dedup,
   and the registry is the prerequisite for "a config names an arch".
 
@@ -168,6 +168,10 @@ experiments/
 - **Depends on** — 0002 (executor) + 0004 (tasks; runs per `arch × task`).
 - **Key files** — `sweep.py` (from `sweep_titans_toy.py`); per-mixer FLOP
   functions; `sweeps/*.yaml` gain `arch`/`task` keys; Titans diagnostics hook.
+- **Diagnostics decision** — deferred from 0001: decide whether architecture-
+  specific observability is exposed as callbacks/hooks or explicit per-sweep
+  helper calls. Keep diagnostics out of sweep objectives unless promoted by a
+  proposal.
 - **Validation / exit** — one sweep per `(arch × task tier)` at **matched
   budget**; the Titans cells reproduce W&B history (metric regression).
 - **Resolves OPEN** — iso-width vs iso-param (lean: fix `(dim, depth)`, report
@@ -215,5 +219,6 @@ expected to force each one:
 
 ## Next action
 
-Draft **0001 — golden gate + scaffold extraction** from the template
-(Sprinter → Skeptic → settle), then implement on `pr/0001-golden-scaffold`.
+**0001 — parity-gated scaffold extraction** is drafted
+([`0001-scaffold.md`](0001-scaffold.md), Sprinter pass); review (Skeptic →
+settle), then implement on `pr/0001-scaffold`.
