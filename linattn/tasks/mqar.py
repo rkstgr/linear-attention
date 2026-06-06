@@ -152,6 +152,8 @@ class MQARTask:
     def __init__(self, cfg: MQARConfig):
         self.cfg = cfg
         self.vocab_size = cfg.vocab_size
+        self.n_train = cfg.n_train
+        self.n_test = cfg.n_test
 
     def make_split(self, key, n: int) -> Split:
         return make_split(key, n, self.cfg)

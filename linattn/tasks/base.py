@@ -32,6 +32,8 @@ class TaskConfig(Protocol):
 
 class Task(Protocol):
     vocab_size: int
+    n_train: int  # default train-split size
+    n_test: int  # default test-split size
     sources: tuple[str, ...]  # source files that feed the executor's digest
 
     def make_split(self, key, n: int) -> "Split": ...
