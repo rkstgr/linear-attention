@@ -68,7 +68,29 @@ archs) are fixed in each proposal — compute is the scarce resource, not LOC.
   test; delete the four copy-pasted scaffolds. Also: rename `Transformer →
   LMModel`; drop the dead `cos`/`sin` plumbing (PE becomes an explicit per-mixer
   choice).
-- **Validation / exit** — **write the golden snapshot first** (param count +
+- Suggestion:
+```
+models/
+  common.py
+  transformer.py
+  linear_attention.py
+  deltanet.py
+  gated_deltanet.py
+  titans.py
+
+tasks/
+  base.py
+  mqar.py
+  addition.py
+
+experiments/
+  train.py
+  sweep.py
+  metrics.py
+  budgets.py
+  flops.py
+```
+- **Validation / exit** — current architectures should be recreated (param count +
   fixed-seed forward per arch, against current code), then refactor under it;
   assert identical for all four archs.
 - **Claim** — infra only; the golden equality *is* the claim (no new measurement).
