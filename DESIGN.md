@@ -1,8 +1,9 @@
 # Design: modular, multi-task, multi-architecture refactor
 
-Status: **proposal / pre-implementation.** This document is the anchor for a
-staged refactor. Decisions that are still open are marked **OPEN** and should be
-resolved (or deliberately deferred) before the phase that depends on them.
+Status: **adopted anchor.** This document owns the *what / why* of the refactor;
+the ordered proposals that implement it (one goal = one proposal = one PR) live
+in [`docs/proposals/ROADMAP.md`](docs/proposals/ROADMAP.md). Decisions still
+marked **OPEN** are resolved in the proposal that depends on them.
 
 ## 1. Why this exists
 
@@ -16,9 +17,15 @@ but real comparison harness:
    size, how many numbers), built from day one to probe **generalization**.
 4. Run the same sweeps we ran on Titans for every architecture, so results are
    **comparable**.
+5. Make experiments modular — every run is a content-addressed `(model, task,
+   train)` config dispatched through one executor, so the work above plugs into a
+   single backbone instead of bespoke scripts.
 
 This is a behavior-preserving refactor first, and a feature addition second. The
-existing Titans W&B results must remain reproducible.
+existing Titans W&B results must remain reproducible. Modularization has a model
+side (1–2), a task side (3), and an experiment side (5); the executor lands
+**early** — right after the scaffold (Phase 1) — because the task and sweep work
+plug into it.
 
 ## 2. Current state (grounded in the code)
 
@@ -32,10 +39,11 @@ existing Titans W&B results must remain reproducible.
   The only real difference is the mixer constructed inside `Block`.
 - **Sweep system is Titans-only:** `sweep_titans_toy.py` + `sweeps/titans_{toy,
   easy,level1}.yaml`. The FLOP estimator and diagnostics are Titans-specific.
-- **The attached `addition_transformer.py` is a separate world:** Flax (not
-  Equinox), its own tokenizer / train loop / model (LayerNorm + GELU +
-  learned positional embeddings + tied weights), plus a MoE section and a
-  Chinchilla IsoFLOP scaling-law harness.
+- **A separate Flax prototype (`addition_transformer.py`, not in this repo) is a
+  different world:** Flax (not Equinox), its own tokenizer / train loop / model
+  (LayerNorm + GELU + learned positional embeddings + tied weights), plus a MoE
+  section and a Chinchilla IsoFLOP scaling-law harness. It motivates §5 and §10
+  but is not adopted.
 
 ### Three couplings the refactor has to break
 
@@ -129,8 +137,7 @@ class Task(Protocol):
 - **MQAR** wraps the current `mqar_example` / `make_split` / `inspect_example`
   with no behavior change; its metric is the existing per-token masked accuracy.
 - **Addition** (see §5) reports **per-example exact-match** instead — getting
-  every answer digit right, which is the metric that matters for arithmetic and
-  the one the attached notebook uses.
+  every answer digit right, the metric that matters for arithmetic.
 
 ### 4.4 Config split
 
@@ -163,15 +170,18 @@ We want to train on one region and test on bigger digits / more numbers. So the
 task carries **two distributions**: a train distribution and an **eval grid**
 over `(max_digits, n_numbers)` that includes out-of-distribution cells.
 
-- **Reporting (to design fully before Phase 3):** a 2D heatmap of exact-match
-  accuracy over `(n_digits, n_numbers)` with the train region marked, logged per
-  arch. This is the artifact that shows *what each mechanism needs to generalize*.
-- **OPEN — positional encoding is the dominant confound here.** Whether a model
+- **Reporting:** a 2D heatmap of exact-match accuracy over
+  `(n_digits, n_numbers)` with the train region marked, logged per arch — the
+  artifact that shows *what each mechanism needs to generalize*. The eval-grid
+  plumbing ships with the addition task (Phase 3); the heatmap becomes a *claim*
+  only once PE is controlled (Phase 5).
+- **Positional encoding is the dominant confound here.** Whether a model
   extrapolates to longer/larger problems is driven more by PE (RoPE vs NoPE vs
   index-hints / abacus-style) than by the mixer. Today the softmax model uses
-  RoPE and the recurrent models use NoPE — an uncontrolled difference. If
-  length generalization is a real goal, PE must become a controlled knob in
-  `ModelConfig`. (Another reason not to use the Flax learned-pos model: it
+  RoPE and the recurrent models use NoPE — an uncontrolled difference.
+  **Decision (§11):** addition (Phase 3) makes an *in-distribution* claim only;
+  PE becomes a controlled `ModelConfig` knob in Phase 5, and length-generalization
+  claims land with it. (Another reason not to use the Flax learned-pos model: it
   cannot run at a longer `T` than it was trained on.)
 
 ## 6. Comparability: what "comparable" means here
@@ -217,62 +227,43 @@ linear-attn (carries convs) < DeltaNet (+gates) < Titans (+fast-memory) < MoE
 param/FLOP delta; in Phase B params is the x-axis so it resolves itself. Confirm
 before Phase A.
 
-## 7. Experiment orchestration (executor) — OPEN, deferred
+## 7. Experiment orchestration (executor) — decided: build on redun, lands early
 
 Requirement: a config-driven system that **tracks every step**, caches results,
-and records provenance — inspired by Marin's executor.
-
-We already have the kernel: `cache.py`'s `cached(key, sources)` is content-addressed
-caching keyed by config + source bytes, and `experiment_capacity.py` is a
-hand-rolled step-DAG with parallel dispatch. The minimal interface any choice
-must support:
+and records provenance. We already have the kernel — `cache.py`'s
+`cached(key, sources)` is content-addressed caching keyed by config + source
+bytes, and `experiment_capacity.py` is a hand-rolled step-DAG with parallel
+dispatch. The minimal interface:
 
 ```python
 step = Step(name, fn, config)     # fn(config) -> result, cached by hash(config + source)
 exp  = Experiment([step, ...])    # a python file that declares steps; W&B is one sink
 ```
 
-**OPEN — three paths, decision postponed:**
+**Decision: build on [redun](https://github.com/insitro/redun)** — Python-native,
+pip-only, local-first — rather than vendor Marin or hand-roll a DAG. It already
+gives us the two things we'd otherwise write by hand: a content-addressed
+step-DAG and queryable provenance (a SQLite call-graph). It hashes each task's
+source + args as the cache key; `@task(version=...)` pins a version to suppress
+reruns on cosmetic edits.
 
-- **(a) Minimal home-grown:** grow `cache.py` into the `Step`/`Experiment` layer
-  above. Lightest; no new deps; full control.
-- **(b) Vendor-and-adapt:** pull the relevant executor files from Marin directly
-  and adapt them, rather than taking the whole framework as a dependency.
-- **(c) Plain configs only:** dataclass/YAML per run + the current `cache.py`,
-  no DAG layer.
-- **(d) Build on `redun`:** a Python-native, pip-only, local-first workflow lib
-  that already provides the content-addressed step-DAG and provenance we'd
-  otherwise hand-roll. **Suggested default — see §7.1.**
+*Why automatic hashing, not Marin's manual versioning.* Marin's executor targets
+**expensive** steps (tokenize a web corpus, train 8B), so it trusts the author to
+declare the few config fields that count and accepts that a *forgotten* field can
+silently collide. Our steps are **cheap** (toy/level1 sweeps run in minutes),
+which inverts the trade-off — a silent false cache hit costs more than a 2-minute
+rerun. So we keep redun's automatic source+args hashing as the correctness
+default and borrow only Marin's two scale-independent ideas as thin conveniences:
+**readable `name-hash` output paths** (greppable, not an opaque blob) and
+**pseudo-dependencies** (version-but-don't-block, for resuming from an
+in-progress checkpoint).
 
-Until this is decided, Phases 0-2 are written to be executor-agnostic: every run
-is already a `(model, task, train)` config, so any of the four slots in later.
-
-### 7.1 Suggested direction: build on redun
-
-Recommendation: build on **redun** rather than vendor Marin or hand-roll a DAG.
-It is Python-native, pip-only, and local-first, and it already gives us the two
-things we'd otherwise write by hand — a content-addressed step-DAG and queryable
-provenance (a SQLite call-graph). By default it hashes each task's source + args
-as the cache key; `@task(version=...)` lets us pin a version to suppress reruns
-on cosmetic edits when we want to.
-
-**What Marin's executor optimized for (and why we choose differently).** Marin's
-headline feature is *user-controlled* "what counts as new": a manual `name` as
-the code-version, an opt-in `versioned` **include-list** of config fields, and
-readable `name-hash` output paths. That design targets **expensive** steps
-(tokenizing a web corpus, training 8B), where a spurious rerun is catastrophic —
-so it trusts the author to declare the few fields that matter, accepting the risk
-that a *forgotten* field silently collides.
-
-Our steps are **cheap** (toy/level1 sweeps run in minutes), which inverts the
-trade-off: a silent false cache hit (a wrong sweep number) costs more than a
-2-minute rerun. So we prefer redun's **automatic source+args hashing** as the
-correctness default, and borrow only Marin's two scale-independent good ideas as
-thin conveniences on top: **readable output paths** (`name-hash`, greppable
-instead of an opaque blob store) and **pseudo-dependencies** (version-but-don't-
-block, for resuming from an in-progress checkpoint). This stays a *lean*, not a
-lock-in: every run is still a `(model, task, train)` config, so swapping redun
-out later remains cheap.
+*Why early (Phase 1, right after the scaffold).* The executor is the
+experiment-side of the same modularization. Landing it before tasks and sweeps
+means each of those plugs into one backbone instead of a bespoke script, and the
+hand-rolled DAG in `experiment_capacity.py` is *replaced*, not extended. This
+stays lean, not lock-in: every run is still a `(model, task, train)` config, so
+swapping redun out later remains cheap.
 
 ## 8. Testing
 
@@ -286,39 +277,62 @@ out later remains cheap.
 
 ## 9. Staged plan
 
-- **Phase 0 — golden net + scaffold extraction.** Pure dedup, zero behavior
-  change. Shared `Block` + `LMModel`, mixer + FFN registries, rename wrapper,
-  drop dead RoPE plumbing. Exit: golden test green for all four archs.
-- **Phase 1 — task abstraction + addition.** `Task` interface; wrap MQAR
-  unchanged; split `Config`; add `tasks/addition.py` with the train/eval-grid
-  split and exact-match metric. Exit: addition trains on the existing models;
-  smoke tests green.
-- **Phase 2 — comparable per-arch HP search.** Arch-agnostic `sweep.py`; fixed
-  size per tier; steps/FLOPs-to-target objective; arch-aware FLOPs; hyperband
-  fix; per-arch diagnostics hook. Exit: one sweep per (arch x task tier) with
-  matched budget; Titans numbers reproduced.
-- **Phase 3 — scaling frontier + executor.** Sweep sizes; acc-vs-params plots;
-  resolve the §7 executor decision. Also finalize the generalization reporting
-  (§5.3) and the PE knob.
-- **Phase 4 (later) — MoE arch; port the IsoFLOP harness** onto the generic
-  Task + arch registry.
+Each phase is one goal = one proposal = one PR; the proposal map (numbers,
+dependencies, pre-registered claims) lives in
+[`docs/proposals/ROADMAP.md`](docs/proposals/ROADMAP.md) and the Sprinter/Auditor
+workflow in [`docs/process/METHOD.md`](docs/process/METHOD.md). The executor
+(Phase 1) is pulled ahead of tasks and sweeps because they plug into it.
+
+- **Phase 0 — golden gate + scaffold extraction** (proposal 0001). Pure dedup,
+  zero behavior change: shared `Block` + `LMModel`, mixer + FFN registries,
+  rename wrapper, drop dead RoPE plumbing. Exit: golden test green for all four
+  archs.
+- **Phase 1 — executor on redun** (proposal 0002). Grow `cache.py` into the
+  redun-backed `Step`/`Experiment` layer (§7) and re-express
+  `experiment_capacity.py` through it. Exit: the capacity experiment reproduces
+  its cached numbers via the executor.
+- **Phase 2 — task interface + Config split** (proposal 0003). `Task` protocol;
+  wrap MQAR with no behavior change; split `Config` into model/task/train; runs
+  declared as `(model, task, train)` on the executor. Exit: MQAR smoke + a
+  capacity cell unchanged.
+- **Phase 3 — addition task** (proposal 0004). `tasks/addition.py` with the
+  tokenizer, target/mask alignment (§5.2), train + eval-grid split, and
+  per-example exact-match. **In-distribution claim only** — length-generalization
+  waits for the PE knob in Phase 5 (§5.3). Exit: addition trains on the existing
+  models; smoke tests green.
+- **Phase 4 — comparable per-arch HP search** (proposal 0005). Arch-agnostic
+  sweep as an executor experiment; fixed size per tier; steps/FLOPs-to-target
+  objective; arch-aware FLOPs; hyperband fix; per-arch diagnostics hook. Resolves
+  the iso-width/param and objective OPENs (§6, §11). Exit: one sweep per
+  (arch x task tier) with matched budget; Titans numbers reproduced.
+- **Phase 5 — scaling frontier + PE knob** (proposal 0006). Sweep sizes;
+  acc-vs-params/FLOPs per arch; make PE a `ModelConfig` knob; finalize the
+  PE-controlled generalization heatmap (§5.3). Resolves the PE OPEN (§11).
+- **Phase 6 (later) — MoE arch + IsoFLOP harness** (proposal 0007) onto the
+  generic Task + arch registry.
 
 ## 10. Explicitly deferred / not adopted
 
 - **MoE architecture** — comes in as an FFN swap (`FFNS["moe"]`), not a new
-  scaffold; needs `jax.lax.ragged_dot`. Phase 4.
+  scaffold; needs `jax.lax.ragged_dot`. Phase 6.
 - **IsoFLOP / Chinchilla scaling-law harness** — port onto the generic Task +
-  arch registry once Phases 0-2 land. Phase 4.
+  arch registry once the core phases land. Phase 6.
 - **Flax `AdditionTransformer` (LayerNorm/GELU/learned-pos/tied)** — not
   adopted; addition reuses the existing Equinox models for comparability.
 
 ## 11. Open decisions (rollup)
 
-1. **Executor approach** (§7): leaning **build on redun** (§7.1); alternatives
-   are minimal home-grown, vendor-from-Marin, or plain configs. *Not locked.*
-2. **Iso-width vs iso-param** for "pinned" size in Phase A (§6).
-3. **Positional-encoding knob** scope, if addition length-generalization is a
-   first-class goal (§5.3).
-4. **Sweep objective details** — steps-to-target vs FLOPs-to-target vs
+Resolved since the first draft:
+
+- **Executor approach** (§7) → **build on redun**, and pulled early to Phase 1.
+- **Positional-encoding knob** (§5.3) → addition (Phase 3) ships eval-grid
+  infrastructure and an *in-distribution* claim only; the PE knob and any
+  length-generalization claim land together in Phase 5.
+
+Still open, each locked in the proposal that needs it:
+
+1. **Iso-width vs iso-param** for "pinned" size — locked in the Phase 4 sweep
+   proposal (§6); current lean: fix `(dim, depth)`, report the param/FLOP delta.
+2. **Sweep objective details** — steps-to-target vs FLOPs-to-target vs
    accuracy-at-budget, and the censoring convention for configs that never solve
-   (§6).
+   — locked in the Phase 4 sweep proposal (§6).
