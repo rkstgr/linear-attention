@@ -40,7 +40,7 @@ the standing reason to distrust any toy headline (the Bitter Lesson hangs here).
 
 | Decision | Current lean | Decide in |
 |---|---|---|
-| Executor approach | `redun` — but **adopt only when `cache.py` actually hurts**, not on schedule | when felt |
+| Executor approach | a **light, self-built** layer grown from `cache.py`, redun + marin-inspired; scope it with a design study first, **adopt only when `cache.py` actually hurts**, not on schedule | design study, then when felt |
 | PE knob / length-gen | in-distribution claim now; PE + length-gen claim land together later (length-gen is confounded by positional encoding) | the addition + scaling work |
 | Iso-width vs iso-param | fix `(dim, depth)`, report Δparams / ΔFLOPs | first comparable sweep |
 | Sweep objective + censoring | steps/FLOPs-to-target; fixed convention for configs that never solve | first comparable sweep |
