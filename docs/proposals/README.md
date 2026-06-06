@@ -1,13 +1,12 @@
 # Proposals
 
-This directory holds settled Sprinter/Auditor proposals.
+Settled Sprinter/Auditor proposals — one goal each, one PR each. Proposals are
+the **front-matter** (what we intend to do and claim); recorded results live in
+[`../experiments/`](../experiments/) (what happened).
 
-Each implementation PR should link to exactly one proposal. Each proposal should
-describe exactly one goal.
+Each proposal implements one phase of `DESIGN.md`, so numbers track phase order.
 
 ## Naming
-
-Use numeric prefixes so dependencies are easy to follow:
 
 ```text
 0000-process.md
@@ -17,13 +16,16 @@ Use numeric prefixes so dependencies are easy to follow:
 
 ## Lifecycle
 
-1. Draft the proposal from a single goal.
+1. Draft from a single goal (usually "Phase N of DESIGN.md").
 2. Add the Sprinter proposal.
-3. Add the Auditor review.
-4. Add the final settlement.
-5. Implement the settlement in one PR.
+3. Add the Auditor review (>= 1 concrete objection, or why none).
+4. Settle: fold in the minimal guardrails.
+5. Implement in one PR.
+6. Record the result in [`../experiments/`](../experiments/) against the
+   pre-registered claim.
 
-## Scope Rule
+## Scope rule
 
-If a proposal wants to solve two independent problems, split it.
-
+One goal per proposal. If it wants to solve two independent problems, split it.
+Mechanical changes can use the Lite path in
+[`../process/PROPOSAL_TEMPLATE.md`](../process/PROPOSAL_TEMPLATE.md).

@@ -1,62 +1,72 @@
-# Proposal: <name>
+# Proposal NNNN: <name>
 
-## Goal
+> Implements DESIGN.md Phase <N> (or: standalone).
 
-One sentence describing the single goal of this proposal.
+Two paths. Use **Lite** for mechanical changes that touch no experiment, metric,
+claim, or evaluation. Use **Full** for anything that affects what we measure or
+claim.
 
-## Non-Goals
+---
 
-List what this proposal explicitly will not do.
+## Lite
 
-## Sprinter Proposal
+- **Goal** — one sentence.
+- **Files** — the handful that change.
+- **Validation** — the command or test that proves it.
 
-Smallest useful implementation.
+If you find yourself needing a confound, a budget, or a claim, it is not Lite.
+Use Full.
 
-Include:
+---
 
-- Main idea
-- Expected files
-- Fast validation path
-- Known shortcuts
+## Full
 
-## Auditor Review
+### Goal
 
-Failure modes and required guardrails.
+One sentence; the single goal.
 
-Include:
+### Non-goals
 
-- Possible confounds
-- Reproducibility requirements
-- Metrics or metadata needed
-- Claims this would not yet support
+What this explicitly will not do.
 
-## Final Settlement
+### Sprinter proposal
 
-The concrete plan after Sprinter incorporates the minimal Auditor guardrails.
+Smallest useful implementation: main idea, expected files, fastest validation
+path, and any shortcuts acceptable for this phase.
 
-## Files Expected To Change
+### Auditor review
+
+Failure modes and required guardrails: possible confounds, reproducibility
+requirements (seeds, git hash, provenance), metrics or metadata needed, and the
+claims this would **not** yet support. At least one concrete objection — or
+"no blocking objection, because ...".
+
+### Final settlement
+
+The concrete plan after Sprinter folds in the minimal guardrails.
+
+### Budget
+
+The compute this authorizes: number of runs, seeds, and rough wall-clock or
+GPU-hours. Equal budgets across architectures unless stated otherwise.
+
+### Files expected to change
 
 - `path/to/file.py`
 
-## Validation
+### Validation
 
-How this proposal will be checked.
+How the change is checked: unit test, smoke run, golden forward comparison, W&B
+dry run, or a manual inspection command.
 
-Examples:
+### Claim (pre-registered)
 
-- Unit tests
-- Smoke run
-- Golden forward comparison
-- W&B dry run
-- Manual inspection command
+The single claim this is allowed to support, written **before** running it, plus
+the metric and the locked eval set that decides it. If this only prepares
+infrastructure, say so. The result is recorded against this claim in
+[`../experiments/`](../experiments/); do not upgrade the claim after seeing the
+numbers.
 
-## Claim Enabled
+### Follow-ups
 
-What this makes possible to claim or measure.
-
-Be precise. If this proposal only prepares infrastructure, say so.
-
-## Follow-Up Proposals
-
-List related work that should stay out of this PR.
-
+Related work that stays out of this PR.

@@ -42,3 +42,4 @@ Use when the PR affects experiments, training, metrics, or evaluation:
 - [ ] Seeds and config provenance are recorded or unchanged.
 - [ ] Metrics are comparable with existing runs or the difference is explained.
 - [ ] Any architecture-specific diagnostics are optional and clearly labeled.
+- [ ] If this runs experiments, the result is (or will be) recorded in `docs/experiments/` against the proposal's pre-registered claim.
