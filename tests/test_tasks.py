@@ -56,5 +56,39 @@ class MQARSplitTest(unittest.TestCase):
         self.assertTrue(bool((a[0] == b[0]).all()))
 
 
+class MQARSplitsTest(unittest.TestCase):
+    CFG = MQARConfig(
+        vocab_size=64,
+        input_seq_len=16,
+        num_kv_pairs=1,
+        power_a=0.01,
+        n_train=20,
+        n_val=8,
+        n_test=8,
+    )
+
+    def _rows(self, split):
+        return {tuple(int(x) for x in row) for row in split[0].tolist()}
+
+    def test_splits_disjoint_and_sized(self):
+        splits = build_task(self.CFG).make_splits(jax.random.PRNGKey(0))
+        self.assertEqual(set(splits), {"train", "val", "test"})
+        self.assertEqual(splits["train"][0].shape[0], 20)
+        self.assertEqual(splits["val"][0].shape[0], 8)
+        self.assertEqual(splits["test"][0].shape[0], 8)
+        tr, va, te = (self._rows(splits[k]) for k in ("train", "val", "test"))
+        self.assertEqual(tr & va, set())
+        self.assertEqual(tr & te, set())
+        self.assertEqual(va & te, set())
+
+    def test_no_val_when_zero(self):
+        cfg = MQARConfig(
+            vocab_size=64, input_seq_len=16, num_kv_pairs=1, power_a=0.01,
+            n_train=20, n_test=8,
+        )
+        splits = build_task(cfg).make_splits(jax.random.PRNGKey(0))
+        self.assertEqual(set(splits), {"train", "test"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -69,6 +69,38 @@ class AdditionTaskTest(unittest.TestCase):
         self.assertFalse(bool((a[0] == c[0]).all()))  # different key -> different
 
 
+class AdditionSplitsTest(unittest.TestCase):
+    CFG = AdditionConfig(max_digits=2, num_addends=2, n_train=20, n_val=8, n_test=8)
+
+    def _rows(self, split):
+        # set of example token-tuples, for disjointness checks
+        return {tuple(int(x) for x in row) for row in split[0].tolist()}
+
+    def test_splits_disjoint_and_sized(self):
+        task = build_task(self.CFG)
+        splits = task.make_splits(jax.random.PRNGKey(0))
+        self.assertEqual(set(splits), {"train", "val", "test"})
+        self.assertEqual(splits["train"][0].shape[0], 20)
+        self.assertEqual(splits["val"][0].shape[0], 8)
+        self.assertEqual(splits["test"][0].shape[0], 8)
+        tr, va, te = (self._rows(splits[k]) for k in ("train", "val", "test"))
+        # de-duplicated sampling => pairwise-disjoint pools (no leakage)
+        self.assertEqual(tr & va, set())
+        self.assertEqual(tr & te, set())
+        self.assertEqual(va & te, set())
+
+    def test_no_val_when_zero(self):
+        cfg = AdditionConfig(max_digits=2, num_addends=2, n_train=20, n_test=8)
+        splits = build_task(cfg).make_splits(jax.random.PRNGKey(0))
+        self.assertEqual(set(splits), {"train", "test"})
+
+    def test_raises_when_space_too_small(self):
+        # 1-digit/1-addend has only 10 distinct problems.
+        cfg = AdditionConfig(max_digits=1, num_addends=1, n_train=8, n_test=8)
+        with self.assertRaises(ValueError):
+            build_task(cfg).make_splits(jax.random.PRNGKey(0))
+
+
 class MetricsTest(unittest.TestCase):
     def test_complete_vs_partial(self):
         # Two examples, two scored positions each.

@@ -298,8 +298,11 @@ def fit(
 ) -> TrainResult:
     """Train `model` on `task` per `train` with early stopping.
 
-    Pre-generates fixed train/test splits (Zoology-style caching), runs AdamW
-    for at most `train.max_epochs`, and stops early on target accuracy or
+    Pre-generates fixed splits (Zoology-style caching). When the task defines a
+    validation split (`n_val > 0`), selection and early stopping run on
+    validation accuracy and the test split is held out for reporting; otherwise
+    it falls back to the legacy two-way path and selects on test. Runs AdamW for
+    at most `train.max_epochs`, stopping early on target accuracy or
     `patience_epochs` without improvement. The loop fails fast on the first
     non-finite step and returns the last known finite model.
 
@@ -309,9 +312,18 @@ def fit(
     if reporter is None:
         reporter = StdoutReporter()
 
-    k_train, k_test, k_loop = jax.random.split(key, 3)
-    train_data = task.make_split(k_train, task.n_train)
-    test_data = task.make_split(k_test, task.n_test)
+    if getattr(task, "n_val", 0) > 0:
+        # Three-way split: select/early-stop on val, report final on test.
+        k_data, k_loop = jax.random.split(key)
+        splits = task.make_splits(k_data)
+        train_data, val_data, test_data = splits["train"], splits["val"], splits["test"]
+    else:
+        # Legacy two-way path with identical keying, so existing cached runs
+        # (capacity/retention, no val split) are byte-for-byte unchanged.
+        k_train, k_test, k_loop = jax.random.split(key, 3)
+        train_data = task.make_split(k_train, task.n_train)
+        test_data = task.make_split(k_test, task.n_test)
+        val_data = None
     train_tokens, train_targets, train_mask = train_data
 
     if opt is None:
@@ -404,14 +416,24 @@ def fit(
         train_loss = float(jnp.mean(jnp.stack(losses)))
         train_acc = float(jnp.mean(jnp.stack(accs)))
         test_acc = evaluate(model, test_data, train.eval_batch_size)
-        history.append(
-            {
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "train_acc": train_acc,
-                "test_acc": test_acc,
-            }
+        val_acc = (
+            evaluate(model, val_data, train.eval_batch_size)
+            if val_data is not None
+            else None
         )
+        # Selection signal: val when available, else test (legacy). Early
+        # stopping and best-acc bookkeeping run on this.
+        select_acc = val_acc if val_acc is not None else test_acc
+
+        record = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "test_acc": test_acc,
+        }
+        if val_acc is not None:
+            record["val_acc"] = val_acc
+        history.append(record)
         reporter.on_epoch(
             epoch=epoch,
             global_step=global_step,
@@ -420,13 +442,13 @@ def fit(
             test_acc=test_acc,
         )
 
-        reason = stopper.update(test_acc)
+        reason = stopper.update(select_acc)
         if reason is not None:
             stop_info["stop_reason"] = reason
             reporter.on_stop(
                 reason=reason,
                 epoch=epoch,
-                test_acc=test_acc,
+                test_acc=select_acc,
                 best_acc=stopper.best_acc,
             )
             break

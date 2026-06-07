@@ -79,6 +79,7 @@ class AdditionConfig:
     num_addends: int
     n_train: int
     n_test: int
+    n_val: int = 0
     name: str = "addition"
 
     @property
@@ -90,8 +91,8 @@ class AdditionConfig:
         return seq_len_for(self.max_digits, self.num_addends)
 
 
-def addition_example(rng: np.random.Generator, cfg: AdditionConfig):
-    """Generate one addition example as position-aligned numpy arrays.
+def _build_example(numbers, cfg: AdditionConfig):
+    """Build position-aligned numpy arrays from explicit operands.
 
     Returns:
         tokens:  (T,) int32    left-padded "a+b+...=s" character ids
@@ -99,8 +100,8 @@ def addition_example(rng: np.random.Generator, cfg: AdditionConfig):
         mask:    (T,) float32  1.0 where the predicted next token is an answer digit
     """
     T = cfg.seq_len
-    numbers = rng.integers(0, 10**cfg.max_digits, size=cfg.num_addends)
-    s = "+".join(str(int(n)) for n in numbers) + "=" + str(int(numbers.sum()))
+    total = int(sum(int(n) for n in numbers))
+    s = "+".join(str(int(n)) for n in numbers) + "=" + str(total)
     ids = encode(s)
     pad = T - len(ids)
     assert pad >= 0, f"problem '{s}' (len {len(ids)}) exceeds seq_len {T}"
@@ -109,9 +110,8 @@ def addition_example(rng: np.random.Generator, cfg: AdditionConfig):
     tokens[pad:] = ids
 
     # Answer tokens are the right-aligned tail (the sum digits).
-    answer_len = len(str(int(numbers.sum())))
     answer_pos = np.zeros(T, dtype=np.float32)
-    answer_pos[T - answer_len :] = 1.0  # 1.0 on answer-digit positions
+    answer_pos[T - len(str(total)) :] = 1.0  # 1.0 on answer-digit positions
 
     # Position-aligned next-token form: logit[t] predicts tokens[t+1].
     targets = np.zeros(T, dtype=np.int32)
@@ -121,26 +121,78 @@ def addition_example(rng: np.random.Generator, cfg: AdditionConfig):
     return tokens, targets, mask
 
 
-def make_split(key, n: int, cfg: AdditionConfig) -> Split:
-    """Pre-generate n addition examples. Returns arrays of shape (n, T).
+def _sample_numbers(rng: np.random.Generator, cfg: AdditionConfig):
+    return rng.integers(0, 10**cfg.max_digits, size=cfg.num_addends)
 
-    The jax ``key`` seeds a numpy generator deterministically, so a fixed key and
-    config reproduce identical bytes (matching MQAR's offline-pool protocol and
-    the executor's content-addressing).
-    """
-    seed = int(jax.random.randint(key, (), 0, np.iinfo(np.int32).max))
-    rng = np.random.default_rng(seed)
-    toks, tgts, masks = [], [], []
-    for _ in range(n):
-        t, g, m = addition_example(rng, cfg)
-        toks.append(t)
-        tgts.append(g)
-        masks.append(m)
+
+def addition_example(rng: np.random.Generator, cfg: AdditionConfig):
+    """Sample one addition example as position-aligned numpy arrays."""
+    return _build_example(_sample_numbers(rng, cfg), cfg)
+
+
+def _seed_from_key(key) -> int:
+    """Deterministic numpy seed from a jax key (reproducible offline pools)."""
+    return int(jax.random.randint(key, (), 0, np.iinfo(np.int32).max))
+
+
+def _stack(rows):
+    toks, tgts, masks = zip(*rows)
     return (
         jnp.asarray(np.stack(toks)),
         jnp.asarray(np.stack(tgts)),
         jnp.asarray(np.stack(masks)),
     )
+
+
+def make_split(key, n: int, cfg: AdditionConfig) -> Split:
+    """Pre-generate n addition examples (i.i.d., with replacement). Shape (n, T).
+
+    The jax ``key`` seeds a numpy generator deterministically, so a fixed key and
+    config reproduce identical bytes (matching MQAR's offline-pool protocol and
+    the executor's content-addressing). Use ``make_splits`` for disjoint
+    train/val/test pools.
+    """
+    rng = np.random.default_rng(_seed_from_key(key))
+    return _stack([addition_example(rng, cfg) for _ in range(n)])
+
+
+def make_splits(key, cfg: AdditionConfig) -> dict[str, Split]:
+    """Disjoint train/val/test pools via de-duplicated sampling.
+
+    Examples are unique operand tuples, so no problem appears in more than one
+    split — the leakage that i.i.d. sampling causes on small problem spaces (a
+    real concern at e.g. 3-digit/2-addend, ~1e6 problems) is removed. ``val`` is
+    omitted when ``cfg.n_val == 0``.
+    """
+    n_val = cfg.n_val
+    total = cfg.n_train + n_val + cfg.n_test
+    space = (10**cfg.max_digits) ** cfg.num_addends
+    if total > space:
+        raise ValueError(
+            f"requested {total} unique examples but only {space} exist for "
+            f"max_digits={cfg.max_digits}, num_addends={cfg.num_addends}"
+        )
+    rng = np.random.default_rng(_seed_from_key(key))
+    seen: set[tuple[int, ...]] = set()
+    tuples: list = []
+    while len(tuples) < total:
+        nums = _sample_numbers(rng, cfg)
+        t = tuple(int(x) for x in nums)
+        if t in seen:
+            continue
+        seen.add(t)
+        tuples.append(nums)
+
+    def build(rows):
+        return _stack([_build_example(nums, cfg) for nums in rows])
+
+    out = {
+        "train": build(tuples[: cfg.n_train]),
+        "test": build(tuples[cfg.n_train + n_val :]),
+    }
+    if n_val > 0:
+        out["val"] = build(tuples[cfg.n_train : cfg.n_train + n_val])
+    return out
 
 
 @register_task("addition")
@@ -155,9 +207,13 @@ class AdditionTask:
         self.seq_len = cfg.seq_len
         self.n_train = cfg.n_train
         self.n_test = cfg.n_test
+        self.n_val = cfg.n_val
 
     def make_split(self, key, n: int) -> Split:
         return make_split(key, n, self.cfg)
+
+    def make_splits(self, key) -> dict[str, Split]:
+        return make_splits(key, self.cfg)
 
     def describe(self, model, key) -> None:
         """Print one problem with the model's predicted vs true answer digits."""
