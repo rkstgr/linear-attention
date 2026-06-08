@@ -1,11 +1,15 @@
 """Hypothesis: Transformer learns MQAR at small scale."""
 
-from experiments.defaults import DEFAULT_TRAIN, MQAR_SMALL, SEEDS
-from linattn.config import ModelConfig, RunConfig
+from experiments.defaults import SEEDS
+from linattn.config import ModelConfig, RunConfig, TrainConfig
 from linattn.executor import executor_main
 from linattn.runner import default_train
+from linattn.tasks.mqar import MQARConfig
 
-task = MQAR_SMALL
+task = MQARConfig(
+    vocab_size=512, input_seq_len=64, num_kv_pairs=4, power_a=0.01,
+    n_train=20_000, n_val=1_000, n_test=1_000,
+)
 
 model = ModelConfig(
     mixer="transformer",
@@ -16,7 +20,10 @@ model = ModelConfig(
     mlp_mult=4,
 )
 
-train = DEFAULT_TRAIN
+train = TrainConfig(
+    batch_size=128, eval_batch_size=128, max_epochs=20,
+    learning_rate=0.0045, target_acc=1.01, patience_epochs=3,
+)
 
 steps = [
     default_train(f"mqar-transformer-L2-200k/s{seed}", RunConfig(model=model, task=task, train=train, seed=seed))
