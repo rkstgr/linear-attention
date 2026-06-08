@@ -37,6 +37,7 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from linattn.tasks.base import Split, register_task
 
@@ -51,6 +52,7 @@ class MQARConfig:
     power_a: float
     n_train: int
     n_test: int
+    n_val: int = 0
     name: str = "mqar"
 
 
@@ -143,6 +145,65 @@ def make_split(key, n: int, cfg: MQARConfig) -> Split:
     )
 
 
+def _draw_unique_pool(key, total: int, cfg: MQARConfig, max_rounds: int = 16) -> Split:
+    """Draw `total` examples and keep only distinct token sequences.
+
+    MQAR's space is enormous so a single draw is essentially already unique; the
+    de-duplication loop just guarantees it. Top-up rounds use fresh sub-keys.
+    """
+    rows = []
+    seen: set[bytes] = set()
+    rk = key
+    for _ in range(max_rounds):
+        need = total - len(rows)
+        if need <= 0:
+            break
+        rk, sub = jax.random.split(rk)
+        tk, tg, mk = make_split(sub, need, cfg)
+        tk, tg, mk = np.asarray(tk), np.asarray(tg), np.asarray(mk)
+        for i in range(tk.shape[0]):
+            b = tk[i].tobytes()
+            if b in seen:
+                continue
+            seen.add(b)
+            rows.append((tk[i], tg[i], mk[i]))
+            if len(rows) == total:
+                break
+    if len(rows) < total:
+        raise ValueError(
+            f"could not draw {total} unique MQAR examples in {max_rounds} rounds"
+        )
+    toks, tgts, masks = zip(*rows)
+    return (
+        jnp.asarray(np.stack(toks)),
+        jnp.asarray(np.stack(tgts)),
+        jnp.asarray(np.stack(masks)),
+    )
+
+
+def make_splits(key, cfg: MQARConfig) -> dict[str, Split]:
+    """Draw one de-duplicated pool, then partition into disjoint train/val/test.
+
+    Partitioning a single unique pool — rather than drawing each split from an
+    independent key — guarantees no example appears in two splits. This matches
+    the addition task's protocol exactly (sample once without redrawing, then
+    split). ``val`` is omitted when ``cfg.n_val == 0``.
+    """
+    total = cfg.n_train + cfg.n_val + cfg.n_test
+    tokens, targets, mask = _draw_unique_pool(key, total, cfg)
+
+    def sl(a: int, b: int) -> Split:
+        return (tokens[a:b], targets[a:b], mask[a:b])
+
+    out = {
+        "train": sl(0, cfg.n_train),
+        "test": sl(cfg.n_train + cfg.n_val, total),
+    }
+    if cfg.n_val > 0:
+        out["val"] = sl(cfg.n_train, cfg.n_train + cfg.n_val)
+    return out
+
+
 @register_task("mqar")
 class MQARTask:
     """Live MQAR task built from an MQARConfig."""
@@ -154,9 +215,13 @@ class MQARTask:
         self.vocab_size = cfg.vocab_size
         self.n_train = cfg.n_train
         self.n_test = cfg.n_test
+        self.n_val = cfg.n_val
 
     def make_split(self, key, n: int) -> Split:
         return make_split(key, n, self.cfg)
+
+    def make_splits(self, key) -> dict[str, Split]:
+        return make_splits(key, self.cfg)
 
     def describe(self, model, key) -> None:
         """Print kv pairs, query positions, and predicted vs true values."""

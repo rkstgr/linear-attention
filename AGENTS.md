@@ -66,12 +66,21 @@ For experiments:
 
 ## Active Queue
 
-1. Retention executor port and `cache.py` decision.
-2. CI for parity, executor, task, and training tests.
-3. Record existing Titans W&B sweeps and historical toy results.
-4. Comparable W&B sweeps for non-Titans architectures.
+Proposal 0004 (scaling-recipe study / cross-task tradeoff pilot) is the active
+research goal; `docs/proposals/0004-implementation.md` tracks the build.
+
+1. Finish 0004 wiring in a network session: dual complete/partial metrics into
+   history+W&B, arch+task-parametric sweep entrypoint, `experiments/recipe.py`.
+2. Retention executor port and `cache.py` decision.
+3. CI for parity, executor, task, training, and budget tests.
+4. Record existing Titans W&B sweeps and historical toy results.
+5. Comparable W&B sweeps for non-Titans architectures (the main grids 0004 gates).
 
 Done: task/config foundation (proposal 0003), README/setup/test cleanup.
+Prepared for 0004 (validate in a network session): parametric addition task,
+shared complete/partial accuracy metrics, draw-once-then-partition train/val/test
+splits (de-duplicated, both tasks), val-based early stopping in `fit`, and the
+iso-parameter budget matcher (`linattn/budget.py`).
 
 Keep one goal per PR. Use `pr/<short-goal>` for foundation work and
 `pr/<number>-<short-goal>` when a numbered proposal exists.

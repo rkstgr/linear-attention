@@ -34,9 +34,19 @@ class Task(Protocol):
     vocab_size: int
     n_train: int  # default train-split size
     n_test: int  # default test-split size
+    n_val: int  # held-out validation size (0 = no val split)
     sources: tuple[str, ...]  # source files that feed the executor's digest
 
     def make_split(self, key, n: int) -> "Split": ...
+
+    def make_splits(self, key) -> dict[str, "Split"]:
+        """Disjoint train/val/test pools (val omitted when ``n_val == 0``).
+
+        Selection must happen on ``val`` and final numbers on ``test``; this is
+        the method the training loop uses so the splits are guaranteed disjoint
+        per task (MQAR by independent keys, addition by de-duplicated sampling).
+        """
+        ...
 
     def describe(self, model, key) -> None: ...
 
