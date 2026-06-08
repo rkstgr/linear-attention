@@ -104,7 +104,7 @@ def _worker(spec):
     task = build_task(data_cfg)
     opt = optax.adamw(train_cfg.learning_rate)
     result = fit(model, task, train_cfg, k_train, opt=opt)
-    best = max(h["test_acc"] for h in result.history)
+    best = max(h["test_partial_accuracy"] for h in result.history)
     save({"best": best, "history": result.history})
     return (spec["T"], spec["label"], best, "fresh")
 

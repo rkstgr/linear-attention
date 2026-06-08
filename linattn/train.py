@@ -54,7 +54,11 @@ def _eval_batch(model, tokens, targets, mask):
 
 
 def evaluate(model, data, batch_size: int) -> float:
-    """Mean masked-position accuracy over the test set."""
+    """Mean masked-position (partial) accuracy over a split.
+
+    Retained for callers that only need the partial metric; the training loop
+    uses ``evaluate_metrics`` so complete and partial come from the same pass.
+    """
     tokens, targets, mask = data
     n = tokens.shape[0]
     n_full = (n // batch_size) * batch_size
@@ -68,6 +72,50 @@ def evaluate(model, data, batch_size: int) -> float:
         )
         accs.append(acc)
     return float(jnp.mean(jnp.stack(accs)))
+
+
+@eqx.filter_jit
+def _eval_batch_metrics(model, tokens, targets, mask):
+    """Per-batch sums for exact across-batch accumulation of both metrics."""
+    logits = jax.vmap(model)(tokens)
+    preds = jnp.argmax(logits, axis=-1)
+    correct = (preds == targets).astype(jnp.float32) * mask
+    correct_positions = correct.sum()
+    total_positions = mask.sum()
+    scored_per_example = mask.sum(-1)
+    per_example_complete = (correct.sum(-1) == scored_per_example) & (
+        scored_per_example > 0
+    )
+    complete_examples = per_example_complete.astype(jnp.float32).sum()
+    scored_examples = (scored_per_example > 0).astype(jnp.float32).sum()
+    return correct_positions, total_positions, complete_examples, scored_examples
+
+
+def evaluate_metrics(model, data, batch_size: int) -> dict[str, float]:
+    """Complete and partial accuracy over a split.
+
+    Accumulates per-batch numerator/denominator across the full pass so the
+    result is identical to a single-batch computation regardless of
+    ``batch_size``. Returns ``{"accuracy": <complete>, "partial_accuracy": <partial>}``.
+    """
+    tokens, targets, mask = data
+    n = tokens.shape[0]
+    n_full = (n // batch_size) * batch_size
+    cp = tp = ce = se = 0.0
+    for i in range(0, n_full, batch_size):
+        cp_i, tp_i, ce_i, se_i = _eval_batch_metrics(
+            model,
+            tokens[i : i + batch_size],
+            targets[i : i + batch_size],
+            mask[i : i + batch_size],
+        )
+        cp += float(cp_i)
+        tp += float(tp_i)
+        ce += float(ce_i)
+        se += float(se_i)
+    partial = cp / max(tp, 1.0)
+    complete = ce / max(se, 1.0)
+    return {"accuracy": complete, "partial_accuracy": partial}
 
 
 class StepStats(NamedTuple):
@@ -144,13 +192,14 @@ class Reporter:
     def on_step(self, stats, *, epoch, step, n_batches, global_step, ms):
         pass
 
-    def on_epoch(self, *, epoch, global_step, train_loss, train_acc, test_acc):
+    def on_epoch(self, *, epoch, global_step, train_loss, metrics):
+        """`metrics` maps split name to ``{accuracy, partial_accuracy}`` dicts."""
         pass
 
     def on_nonfinite(self, stats, *, epoch, step, n_batches, global_step, ms):
         pass
 
-    def on_stop(self, *, reason, epoch, test_acc, best_acc):
+    def on_stop(self, *, reason, epoch, select_acc, best_acc):
         pass
 
 
@@ -164,11 +213,20 @@ class StdoutReporter(Reporter):
             f"{ms:7.1f} ms/step"
         )
 
-    def on_epoch(self, *, epoch, global_step, train_loss, train_acc, test_acc):
-        print(
+    def on_epoch(self, *, epoch, global_step, train_loss, metrics):
+        train_p = metrics["train"]["partial_accuracy"]
+        test_p = metrics["test"]["partial_accuracy"]
+        test_c = metrics["test"]["accuracy"]
+        line = (
             f"epoch {epoch:3d}  train_loss {train_loss:.4f}  "
-            f"train_acc {train_acc:.3f}  test_acc {test_acc:.3f}"
+            f"train_acc {train_p:.3f}  test_acc {test_p:.3f}  "
+            f"test_complete {test_c:.3f}"
         )
+        if "val" in metrics:
+            val_p = metrics["val"]["partial_accuracy"]
+            val_c = metrics["val"]["accuracy"]
+            line += f"  val_acc {val_p:.3f}  val_complete {val_c:.3f}"
+        print(line)
 
     def on_nonfinite(self, stats, *, epoch, step, n_batches, global_step, ms):
         print(
@@ -178,10 +236,10 @@ class StdoutReporter(Reporter):
             f"param_norm {float(stats.param_norm)}"
         )
 
-    def on_stop(self, *, reason, epoch, test_acc, best_acc):
+    def on_stop(self, *, reason, epoch, select_acc, best_acc):
         if reason == "target_acc":
             print(
-                f"early stop @ epoch {epoch}: test_acc {test_acc:.3f} (target reached)"
+                f"early stop @ epoch {epoch}: select_acc {select_acc:.3f} (target reached)"
             )
         elif reason == "patience":
             print(f"early stop @ epoch {epoch}: no improvement (best {best_acc:.3f})")
@@ -210,17 +268,16 @@ class WandbReporter(Reporter):
             step=global_step,
         )
 
-    def on_epoch(self, *, epoch, global_step, train_loss, train_acc, test_acc):
-        self.run.log(
-            {
-                "epoch": epoch,
-                "learning/epoch_train_loss": train_loss,
-                "learning/epoch_train_acc": train_acc,
-                "learning/test_acc": test_acc,
-                "health/nonfinite": 0.0,
-            },
-            step=global_step,
-        )
+    def on_epoch(self, *, epoch, global_step, train_loss, metrics):
+        payload = {
+            "epoch": epoch,
+            "learning/epoch_train_loss": train_loss,
+            "health/nonfinite": 0.0,
+        }
+        for split, m in metrics.items():
+            payload[f"learning/{split}_accuracy"] = float(m["accuracy"])
+            payload[f"learning/{split}_partial_accuracy"] = float(m["partial_accuracy"])
+        self.run.log(payload, step=global_step)
 
     def on_nonfinite(self, stats, *, epoch, step, n_batches, global_step, ms):
         self.run.log(
@@ -415,31 +472,39 @@ def fit(
 
         train_loss = float(jnp.mean(jnp.stack(losses)))
         train_acc = float(jnp.mean(jnp.stack(accs)))
-        test_acc = evaluate(model, test_data, train.eval_batch_size)
-        val_acc = (
-            evaluate(model, val_data, train.eval_batch_size)
-            if val_data is not None
-            else None
-        )
-        # Selection signal: val when available, else test (legacy). Early
-        # stopping and best-acc bookkeeping run on this.
-        select_acc = val_acc if val_acc is not None else test_acc
+        # Dual (complete + partial) metrics, evaluated once per split per epoch.
+        # `train_metrics` uses the eval model on train data — a slight cost paid
+        # so the headline is reported on the same protocol as val/test.
+        train_metrics = evaluate_metrics(model, train_data, train.eval_batch_size)
+        test_metrics = evaluate_metrics(model, test_data, train.eval_batch_size)
+        metrics: dict[str, dict[str, float]] = {
+            "train": train_metrics,
+            "test": test_metrics,
+        }
+        if val_data is not None:
+            metrics["val"] = evaluate_metrics(model, val_data, train.eval_batch_size)
+
+        # Selection signal: val partial when available, else test partial
+        # (legacy). Partial is the smooth signal, matching the legacy target_acc
+        # semantics; complete accuracy is reported but not selected on (it sits
+        # at 0 then jumps, which is poor for patience).
+        select_split = "val" if "val" in metrics else "test"
+        select_acc = metrics[select_split]["partial_accuracy"]
 
         record = {
             "epoch": epoch,
             "train_loss": train_loss,
-            "train_acc": train_acc,
-            "test_acc": test_acc,
+            "train_step_acc": train_acc,  # streaming train_step partial acc
         }
-        if val_acc is not None:
-            record["val_acc"] = val_acc
+        for split, m in metrics.items():
+            record[f"{split}_accuracy"] = float(m["accuracy"])
+            record[f"{split}_partial_accuracy"] = float(m["partial_accuracy"])
         history.append(record)
         reporter.on_epoch(
             epoch=epoch,
             global_step=global_step,
             train_loss=train_loss,
-            train_acc=train_acc,
-            test_acc=test_acc,
+            metrics=metrics,
         )
 
         reason = stopper.update(select_acc)
@@ -448,7 +513,7 @@ def fit(
             reporter.on_stop(
                 reason=reason,
                 epoch=epoch,
-                test_acc=select_acc,
+                select_acc=select_acc,
                 best_acc=stopper.best_acc,
             )
             break

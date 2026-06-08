@@ -52,13 +52,19 @@ class FitValPathTest(unittest.TestCase):
         model = build_lm_model("linear_attention", 64, 16, 2, 1, 4, jax.random.PRNGKey(0))
         return fit(model, task, train, jax.random.PRNGKey(1), reporter=Reporter())
 
-    def test_val_present_logs_val_acc(self):
+    def test_val_present_logs_val_metrics(self):
         result = self._run(n_val=8)
-        self.assertIn("val_acc", result.history[0])
+        self.assertIn("val_partial_accuracy", result.history[0])
+        self.assertIn("val_accuracy", result.history[0])
+        # both train and test metrics are always present in dual-metric mode
+        self.assertIn("train_accuracy", result.history[0])
+        self.assertIn("test_accuracy", result.history[0])
 
     def test_no_val_is_legacy(self):
         result = self._run(n_val=0)
-        self.assertNotIn("val_acc", result.history[0])
+        self.assertNotIn("val_partial_accuracy", result.history[0])
+        # test/train still dual-metric in the two-way path
+        self.assertIn("test_partial_accuracy", result.history[0])
 
 
 if __name__ == "__main__":

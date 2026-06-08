@@ -94,11 +94,16 @@ def executor_main(
     parallel: int = 1,
     rerun: bool = False,
     experiment_name: str | None = None,
+    on_step_complete: Callable[[StepResult], None] | None = None,
 ) -> list[StepResult]:
     """Execute steps locally and return one result per requested step.
 
     `parallel=1` is serial and easiest to debug. `parallel>1` uses spawned
     worker processes so JAX-heavy cells behave like the old experiment scripts.
+
+    ``on_step_complete`` fires once per cell as soon as it finishes (cached or
+    fresh), with the cell's ``StepResult``. Use this to stream side-effects
+    (e.g. W&B logging) without waiting for the whole batch.
     """
 
     if parallel < 1:
@@ -121,10 +126,25 @@ def executor_main(
         plans_by_digest.setdefault(plan.digest, plan)
 
     ordered_plans = _topological_unique(plans_by_digest.values())
+
+    def _on_done(plan: _StepPlan, status: str) -> None:
+        if on_step_complete is None:
+            return
+        on_step_complete(
+            StepResult(
+                name=plan.step.name,
+                digest=plan.digest,
+                output_path=str(plan.output_path),
+                cache_status=status,
+                status="SUCCESS",
+                status_path=str(plan.output_path / "status.json"),
+            )
+        )
+
     if parallel == 1:
-        statuses = _run_serial(ordered_plans, rerun)
+        statuses = _run_serial(ordered_plans, rerun, _on_done)
     else:
-        statuses = _run_parallel(ordered_plans, parallel, rerun)
+        statuses = _run_parallel(ordered_plans, parallel, rerun, _on_done)
 
     results_by_digest = {
         digest: StepResult(
@@ -205,15 +225,25 @@ class _Planner:
         return list(self._plans_by_id.values())
 
 
-def _run_serial(plans: list[_StepPlan], rerun: bool) -> dict[str, str]:
+def _run_serial(
+    plans: list[_StepPlan],
+    rerun: bool,
+    on_done: Callable[[_StepPlan, str], None],
+) -> dict[str, str]:
     statuses: dict[str, str] = {}
     for plan in plans:
         statuses[plan.digest] = _run_one(plan, rerun)
         print(f"[{statuses[plan.digest]}] {plan.step.name}", flush=True)
+        on_done(plan, statuses[plan.digest])
     return statuses
 
 
-def _run_parallel(plans: list[_StepPlan], parallel: int, rerun: bool) -> dict[str, str]:
+def _run_parallel(
+    plans: list[_StepPlan],
+    parallel: int,
+    rerun: bool,
+    on_done: Callable[[_StepPlan, str], None],
+) -> dict[str, str]:
     statuses: dict[str, str] = {}
     remaining = {plan.digest: plan for plan in plans}
     running = {}
@@ -242,6 +272,7 @@ def _run_parallel(plans: list[_StepPlan], parallel: int, rerun: bool) -> dict[st
                 plan = running.pop(fut)
                 statuses[plan.digest] = fut.result()
                 print(f"[{statuses[plan.digest]}] {plan.step.name}", flush=True)
+                on_done(plan, statuses[plan.digest])
     return statuses
 
 

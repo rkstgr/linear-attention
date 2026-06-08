@@ -43,14 +43,6 @@ LEVEL1_TRAIN = TrainConfig(
 # DEFAULT_TRAIN; level1 carries its own train config.
 MQAR_CONFIGS = {"toy": toy, "easy": easy, "level1": level1}
 
-_DATA_FIELDS = {f.name for f in dataclasses.fields(MQARConfig)}
-_TRAIN_FIELDS = {f.name for f in dataclasses.fields(TrainConfig)}
-
-
-def train_for(name: str) -> TrainConfig:
-    return LEVEL1_TRAIN if name == "level1" else DEFAULT_TRAIN
-
-
 def resolve(name: str, **overrides) -> tuple[MQARConfig, TrainConfig]:
     """Return (data, train) configs for a named preset, applying non-None overrides.
 
@@ -58,14 +50,10 @@ def resolve(name: str, **overrides) -> tuple[MQARConfig, TrainConfig]:
     values (unset CLI flags) are ignored.
     """
     data = MQAR_CONFIGS[name]
-    train = train_for(name)
-    data_over = {
-        k: v for k, v in overrides.items() if k in _DATA_FIELDS and v is not None
-    }
-    train_over = {
-        k: v for k, v in overrides.items() if k in _TRAIN_FIELDS and v is not None
-    }
+    train = LEVEL1_TRAIN if name == "level1" else DEFAULT_TRAIN
+    data_fields = {f.name for f in dataclasses.fields(MQARConfig)}
+    train_fields = {f.name for f in dataclasses.fields(TrainConfig)}
     return (
-        dataclasses.replace(data, **data_over),
-        dataclasses.replace(train, **train_over),
+        dataclasses.replace(data, **{k: v for k, v in overrides.items() if k in data_fields and v is not None}),
+        dataclasses.replace(train, **{k: v for k, v in overrides.items() if k in train_fields and v is not None}),
     )

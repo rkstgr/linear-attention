@@ -26,10 +26,10 @@ Everything below assumes CPU (`JAX_PLATFORMS=cpu`, the repo default).
 | C. Draw-once-then-partition splits (both tasks, de-duplicated) | prepared (logic-checked) | `tests.test_addition`, `tests.test_tasks` |
 | D. Val-based early stopping in `fit` | prepared | `uv run python -m unittest tests.test_train -v` |
 | E. Iso-parameter budget matcher | prepared | `uv run python -m unittest tests.test_budget -v` |
-| F. Dual metrics into history + W&B | TODO (spec below) | — |
-| G. Test-at-best-val reporting | TODO (spec below) | — |
-| H. Arch+task-parametric sweep entrypoint | TODO (spec below) | — |
-| I. `experiments/recipe.py` driver | TODO (spec below) | — |
+| F. Dual metrics into history + W&B | done | `uv run python -m unittest tests.test_train -v` |
+| G. Test-at-best-val reporting | done | `headline.test_*` in `metrics.json` |
+| H. Arch+task-parametric sweep entrypoint | done | `experiments/sweep.py`, `linattn/archs.py` |
+| I. `experiments/recipe.py` driver | done (smoke-tested) | `uv run python -m experiments.recipe --stage lr_selection --smoke` |
 | J. Retention -> executor port; delete `cache.py`; CI | TODO | — |
 
 First action in the network session: **run the full suite**. The prepared items
@@ -60,55 +60,42 @@ Backbone embeddings are **untied** (`tok_emb` + separate `lm_head`), identical
 across all mixers, so the "embedding share held constant across archs" fairness
 condition holds by construction.
 
-## TODO specs
+## Built this session (F-I)
 
-### F. Dual complete/partial metrics into history + W&B
-
-Goal: log `{train,val,test}_accuracy` (complete) and `{train,val,test}_partial_accuracy`.
-
-- Add `evaluate_metrics(model, data, batch_size) -> {"accuracy", "partial_accuracy"}`
-  in `train.py`, accumulating exact numerator/denominator across batches (reuse
-  `metrics.accuracies`). Keep `evaluate` (partial-only) for the legacy path.
-- In the epoch loop compute metrics for train(eval)/val/test; write all six keys
-  to `history`.
-- Reporter signature change: `on_epoch(... )` currently takes `test_acc`. Widen to
-  pass the metric dict (or per-split kwargs) and update `StdoutReporter`,
-  `WandbReporter`, `MultiReporter`, and the W&B keys in `experiments/sweep_titans_toy.py`.
-- **Decision to confirm:** selection metric. Current prepared code early-stops on
-  val **partial** accuracy (smooth, matches the legacy `target_acc` semantics).
-  Complete accuracy can sit at 0 then jump, which is poor for patience. Recommend:
-  select on val partial, report complete as the headline. Flip by changing the
-  scalar fed to `stopper.update`.
-
-### G. Test-at-best-val reporting
-
-Report the test metric at the epoch with the best **val** (not best test, not
-final). Two options: snapshot the best-val model during the loop (memory cost), or
-post-hoc pick `argmax val_acc` from history and read its test metric. Post-hoc is
-enough for the pilot; do it in `runner.train_run` when writing `metrics.json`.
-
-### H. Arch + task-parametric sweep entrypoint
-
-Replace the Titans-hardcoded `experiments/sweep_titans_toy.py` with one entrypoint
-driven by an **arch registry**: `mixer -> {extra_hyperparams, build_kwargs, flop_estimator}`.
-For the pilot only `lr` (+ Titans `memory_mult`, `max_inner_lr`) is searched. The
-FLOP estimator is **deferred** (iso-FLOP is not in the pilot); stub it for now.
-Keep the W&B metric grouping and the `objective/score` convention.
-
-### I. `experiments/recipe.py` driver (the pilot)
-
-Executor-backed (like `experiments/capacity.py`). Cells = arch x shape x task x
-seed x lr. Stages, to keep equal-HPO-budget cheap:
-
-1. lr selection: 5 archs x 3 shapes x 2 tasks x 3 lr x 1 seed, select lr per
-   (arch, shape, task) on **val**.
-2. recipe + seeds: best lr, 3 seeds; pick depth/width recipe per task (Pareto-best
-   averaged across archs) + read the cross-task tradeoff gate.
-3. stability: chosen recipe only, at the 1M budget, 3 seeds.
-
-Use `budget.solve_dim_for_params` to fix dims; `head_dim=16`; cells MQAR
-`N_KV=4,T=64,vocab=512` and addition 3-digit/2-addend; sizes `n_train=50k`,
-`n_val=2k`, `n_test=2k` (knobs). Emit a summary table and a heatmap-ready JSON.
+- **F. Dual metrics** — `linattn/train.py` gains `evaluate_metrics(model, data,
+  batch_size)` returning `{"accuracy", "partial_accuracy"}`, accumulating exact
+  numerator/denominator across batches. `evaluate` (partial-only) is retained
+  for callers that only need partial. The epoch loop computes metrics for
+  train(eval)/val/test and writes six history keys
+  (`{train,val,test}_accuracy`, `{train,val,test}_partial_accuracy`). Reporter
+  signatures widened — `on_epoch(*, epoch, global_step, train_loss, metrics)`
+  takes the per-split dict; `StdoutReporter`/`WandbReporter`/`MultiReporter`
+  updated. W&B logs `learning/<split>_accuracy` and
+  `learning/<split>_partial_accuracy`. Selection metric: val partial when
+  present, else test partial (legacy).
+- **G. Test-at-best-val** — `runner._headline_from_history` post-hoc picks the
+  epoch with the highest selection metric (`val_partial_accuracy` when val
+  exists, `test_partial_accuracy` otherwise) and records its test metrics under
+  `metrics["headline"]`. `metrics["best"]` stays the same partial test scalar
+  capacity/retention callers already read.
+- **H. Generic sweep entrypoint** — `linattn/archs.py` is the arch registry
+  (`mixer -> ArchSpec{extra_hyperparams, flop_estimator stub}`); Titans has
+  `{memory_mult=4, max_inner_lr=5e-3}` as the searched extras. `experiments/sweep.py`
+  replaces the deleted `sweep_titans_toy.py`: reads `mixer`, `task`
+  (`mqar`/`addition`), `dim`/`n_heads`/`head_dim`/`n_layers`/`mlp_mult`,
+  `learning_rate`, `seed`, per-task knobs, and (for MQAR) the `config_name`
+  preset shortcut. The three `sweeps/titans_*.yaml` files now point at
+  `experiments.sweep` with `mixer: titans, task: mqar` injected.
+- **I. Pilot driver** — `experiments/recipe.py` runs the three stages
+  executor-backed: `lr_selection`, `recipe`, `stability`. Cells solved via
+  `budget.solve_dim_for_params` per (arch, n_layers, vocab, target). Defaults:
+  `head_dim=16`, MQAR cell `N_KV=4/T=64/vocab=512`, addition 3-digit/2-addend,
+  `n_train=50k/n_val=2k/n_test=2k`, lr grid `(3e-4, 1e-3, 3e-3)`, seeds
+  `(1,2,3)`, targets 500k (pilot) and 1M (stability). `--smoke` shrinks
+  task/train sizes and the param target to 20k for orchestration checks.
+  Stage handoff goes through `.experiment_cache/runs/recipe_summary_*.json`
+  (best lr lookup, picked recipe). Each stage prints a markdown table; the
+  recipe stage also prints the cross-task tradeoff ranking.
 
 ### J. Foundation cleanup
 
@@ -125,9 +112,14 @@ Use `budget.solve_dim_for_params` to fix dims; `head_dim=16`; cells MQAR
 
 ## Validation checklist (network session)
 
-1. `uv sync && uv sync --group experiment`.
-2. `uv run python -m unittest discover -v` — A-E green.
-3. `uv run python -m linattn.budget ...` — sanity-check solved dims, fix recipe shapes.
-4. Implement F-G, re-run tests, confirm capacity/retention numbers unchanged.
-5. Implement H-I, smoke-run `experiments/recipe.py` at tiny sizes.
-6. Run the pilot; record results in `docs/experiments/` per the ledger schema.
+1. `uv sync && uv sync --group experiment`. **done**
+2. `uv run python -m unittest discover -v` — 31 tests, A-E green. **done**
+3. `uv run python -m linattn.budget --targets 500000 1000000 --layers 1 2 4 --vocab 512 --head-dim 16`
+   — sanity-check solved dims, fix recipe shapes.
+4. F-G implemented; tests green; capacity/retention numbers unchanged (legacy
+   path keys via `headline.test_partial_accuracy`).
+5. H-I implemented; orchestration smoke-tested (4-cell mini-smoke at
+   `target_params=20k`, 2 epochs, n_train=512). End-to-end JIT compile,
+   headlines, and aggregation verified.
+6. Run the pilot — `uv run python -m experiments.recipe --stage all --parallel <N>`.
+   Then record results in `docs/experiments/` per the ledger schema.
